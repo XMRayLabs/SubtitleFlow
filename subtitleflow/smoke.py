@@ -42,9 +42,9 @@ def run(destination):
                 report = json.loads((window.last_root / "report.json").read_text(encoding="utf-8"))
                 outcome["ok"] = report["status"] == "done"
                 outcome["status"] = window.table.item(0, 1).text()
-                outcome["fcpxml_created"] = (window.last_root / "fcpxml/字幕.fcpxml").exists()
+                outcome["fcpxml_created"] = (window.last_root / "转换后的fcpxml/字幕.fcpxml").exists()
                 outcome["ok"] = outcome["ok"] and outcome["fcpxml_created"]
-                outcome["merged"] = (window.last_root / "merged/字幕.srt").read_text(encoding="utf-8")
+                outcome["merged"] = (window.last_root / "合并后的srt/字幕.srt").read_text(encoding="utf-8")
                 window.grab().save(str(destination.with_suffix(".png")))
             finally:
                 QTimer.singleShot(0, app.quit)
