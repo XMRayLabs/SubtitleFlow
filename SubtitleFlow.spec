@@ -5,6 +5,7 @@ datas = [('legal', 'legal'), ('assets', 'assets')]
 for package in ('keyring', 'jaraco.classes', 'jaraco.context', 'jaraco.functools', 'more-itertools'):
     datas += copy_metadata(package)
 hidden = ['keyring.backends.Windows'] if sys.platform == 'win32' else ['keyring.backends.macOS']
+hidden += ['_cffi_backend']
 a = Analysis(['run_app.py'], pathex=[], binaries=[], datas=datas, hiddenimports=hidden,
              excludes=['tkinter', 'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtNetwork',
                        'PySide6.QtOpenGL', 'PySide6.QtSvg', 'PySide6.QtTest',
