@@ -62,4 +62,6 @@ else:
         raise ValueError("Signing key does not match embedded public key")
     envelope = {"key_id": key_id, "payload": base64.b64encode(payload).decode(),
                 "signature": base64.b64encode(key.sign(payload).signature).decode()}
+    # Compatibility for pre-signature clients; new clients trust only the verified payload.
+    envelope.update(json.loads(payload))
     args.output.write_text(json.dumps(envelope, indent=2), encoding="utf-8")

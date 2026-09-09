@@ -56,3 +56,5 @@ python tools/make_update_manifest.py --use-local-key --repo XMRayLabs/SubtitleFl
 ```
 
 release-assets 需包含实际安装包对应的 asset.json；发布前还应独立复核文件摘要与来源。自动草稿在没有签名密钥时不生成 update.json。签名清单与平台代码签名是不同要求，后者仍需配置证书。详见 SECURITY.md。
+
+发布稳定版之前必须上传使用本机密钥签署的 update.json，并验证当前客户端 check(repo, current=旧版本) 能解析三个平台。没有清单的安装包草稿不可直接发布为稳定版。清单顶层保留旧客户端兼容字段，新客户端只信任签名 payload。
