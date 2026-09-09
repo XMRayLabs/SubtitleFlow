@@ -36,7 +36,7 @@ class RegressionTests(unittest.TestCase):
             (root / "report.json").write_text(json.dumps(report), encoding="utf-8")
             with self.assertRaises(ValueError):
                 Job([], root, JobOptions(mode="merge"), APIConfig("", "", ""), threading.Event(), resume=root).run()
-            self.assertFalse((root / "originals").exists())
+            self.assertFalse((root / "原始的srt").exists())
 
     def test_release_gate_blocks_without_review(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -54,7 +54,7 @@ SubtitleFlow 是一款适用于 Windows 和 macOS 的中文桌面工具。将零
 
 ```text
 任务目录/
-├── originals/     原始 SRT 副本
+├── 原始的srt/     原始 SRT 副本
 ├── 合并后的srt/    合并后的 SRT
 ├── 翻译后的srt/    翻译后的 SRT
 ├── 转换后的fcpxml/ 可选的 FCPXML

@@ -342,7 +342,7 @@ class Window(QMainWindow):
                 name = item["name"]
                 if Path(name).name != name or ":" in name or "\\" in name:
                     raise ValueError("任务文件名不安全")
-                self.paths.append(root / "originals" / name)
+                self.paths.append(root / "原始的srt" / name)
                 row = self.table.rowCount()
                 self.table.insertRow(row)
                 for col, text in enumerate((item["source"], "已完成" if item["status"] == "done" else "待重试", item.get("error", ""))):

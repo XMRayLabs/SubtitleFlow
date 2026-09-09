@@ -77,13 +77,13 @@ class Job:
             names.add(name.casefold())
         if self.resume:
             # Migrate whole result folders, including completed files; never overwrite a destination.
-            for old, new in (("merged", "合并后的srt"), ("translated", "翻译后的srt"), ("fcpxml", "转换后的fcpxml")):
+            for old, new in (("originals", "原始的srt"), ("merged", "合并后的srt"), ("translated", "翻译后的srt"), ("fcpxml", "转换后的fcpxml")):
                 previous, destination = self.root / old, self.root / new
                 if previous.exists():
                     if destination.exists():
                         raise ValueError("任务中同时存在新旧结果目录，请先整理后恢复")
                     previous.rename(destination)
-        for folder in ("originals", ".progress"):
+        for folder in ("原始的srt", ".progress"):
             (self.root / folder).mkdir(exist_ok=True)
         if self.options.mode in ("merge", "both"):
             (self.root / "合并后的srt").mkdir(exist_ok=True)
@@ -106,7 +106,7 @@ class Job:
                 item["status"] = "running"
                 atomic_json(self.root / "report.json", report)
                 self.event("file", index, "处理中", "")
-                original = self.root / "originals" / item["name"]
+                original = self.root / "原始的srt" / item["name"]
                 safe_tree(self.root)
                 if not original.exists():
                     if self.resume:

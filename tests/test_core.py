@@ -167,9 +167,9 @@ class JobTests(unittest.TestCase):
             with patch("subtitleflow.jobs.Client", FakeClient):
                 output = Job(paths, root / "out", JobOptions(), APIConfig("https://example.test/v1", "secret", "test"),
                              threading.Event()).run()
-                for folder in ("originals", "合并后的srt", "翻译后的srt"):
+                for folder in ("原始的srt", "合并后的srt", "翻译后的srt"):
                     self.assertEqual(len(list((output / folder).glob("*.srt"))), 10)
-                self.assertEqual((output / "originals/字幕.srt").read_bytes(), paths[0].read_bytes())
+                self.assertEqual((output / "原始的srt/字幕.srt").read_bytes(), paths[0].read_bytes())
                 self.assertNotIn("secret", (output / "report.json").read_text())
                 paths[0].write_text("broken", encoding="utf-8")
                 output2 = Job(paths, root / "out", JobOptions(), APIConfig("https://example.test/v1", "secret", "test"),
@@ -177,6 +177,21 @@ class JobTests(unittest.TestCase):
                 report = json.loads((output2 / "report.json").read_text(encoding="utf-8"))
                 self.assertEqual(report["files"][0]["status"], "failed")
                 self.assertEqual(sum(f["status"] == "done" for f in report["files"]), 9)
+
+
+    def test_restore_legacy_original_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "a.srt"
+            source.write_text(render([cue(0, 1, "A.")]), encoding="utf-8")
+            options, api = JobOptions(mode="merge"), APIConfig("", "")
+            output = Job([source], base / "out", options, api, threading.Event()).run()
+            (output / "原始的srt").rename(output / "originals")
+            (output / "合并后的srt").rename(output / "merged")
+            Job([], base / "out", options, api, threading.Event(), resume=output).run()
+            self.assertTrue((output / "原始的srt/a.srt").exists())
+            self.assertTrue((output / "合并后的srt/a.srt").exists())
+            self.assertFalse((output / "originals").exists())
 
     def test_merge_without_api(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -57,10 +57,10 @@ class SecurityTests(unittest.TestCase):
             report=json.loads((root/'report.json').read_text(encoding='utf-8'))
             report['files'][0]['status']='pending'
             (root/'report.json').write_text(json.dumps(report))
-            (root/'originals/a.srt').unlink()
+            (root/'原始的srt/a.srt').unlink()
             with patch('subtitleflow.jobs.read_bytes',side_effect=AssertionError('external read')):
                 Job([],base/'out',options,api,threading.Event(),resume=root).run()
-            self.assertFalse((root/'originals/a.srt').exists())
+            self.assertFalse((root/'原始的srt/a.srt').exists())
             self.assertEqual(json.loads((root/'report.json').read_text(encoding='utf-8'))['files'][0]['status'],'failed')
 
     def test_link_write_rejected(self):
