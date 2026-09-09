@@ -64,7 +64,7 @@ def collect(fetch=False):
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(source, dest)
                     copied.append(str(dest.relative_to(LEGAL)))
-        if not copied:
+        if not copied and name not in ("PySide6-Essentials", "shiboken6"):
             raise RuntimeError(f"{name}: no license text supplied")
         components.append({"name": name, "version": dist.version, "selected_license": selected,
                            "upstream": f"https://pypi.org/project/{name}/{dist.version}/",
@@ -99,6 +99,14 @@ def collect(fetch=False):
                         with tar.extractfile(member) as stream:
                             dest.write_bytes(stream.read())
             records.append({"file": name, "url": url, "sha256": sha(archive)})
+    for component in components:
+        if not component["license_files"]:
+            # Some macOS wheels omit license files; use the exact matching source archive.
+            found = [p for p in (licenses / "upstream-source").rglob("*")
+                     if p.is_file() and "pyside-setup" in str(p) and "license" in p.name.lower()]
+            if not found:
+                raise RuntimeError(f"{component['name']}: matching source license files unavailable")
+            component["license_files"] = [str(p.relative_to(LEGAL)) for p in found]
     data = {"python": PYVER, "platform": sys.platform, "components": components,
             "sources": records, "review_status": "pending-binary-review",
             "required_sources": list(SOURCES)}

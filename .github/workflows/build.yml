@@ -46,11 +46,13 @@ jobs:
         if: runner.os == 'macOS'
         run: python tools/release_gate.py dist/SubtitleFlow.app --inventory-only
       - run: python tools/archive_build.py
+      - run: python tools/package_release.py --review-build
       - uses: actions/upload-artifact@v4
         with:
           name: SubtitleFlow-${{ matrix.platform }}
           path: |
             dist/artifacts/
+            dist/installers/
             build/binary-inventory.json
             build/standalone-validation.json
             build/gui-preview.png
@@ -63,9 +65,18 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      - name: Generate update manifest
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.asset.json' -o -name '*.zip' \) -exec cp {} release-assets/ \;
+          python tools/make_update_manifest.py --repo "${{ github.repository }}" --version "${RELEASE_TAG#v}" --assets release-assets --output release-assets/update.json
       - name: Create draft with tested platform builds
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,4 +85,4 @@ jobs:
         shell: bash
         run: |
           gh release create "$RELEASE_TAG" --draft --verify-tag --title "SubtitleFlow $RELEASE_TAG" --notes "Windows and macOS builds passed automated tests. Complete platform signing and license review before publishing installers and update.json."
-          find artifacts -name '*.zip' -exec gh release upload "$RELEASE_TAG" {} \;
+          gh release upload "$RELEASE_TAG" release-assets/*

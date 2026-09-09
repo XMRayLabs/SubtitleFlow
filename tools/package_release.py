@@ -16,9 +16,9 @@ from subtitleflow.updates import platform_key
 from tools.release_gate import gate, digest
 
 
-def package(audit):
+def package(audit, review_build=False):
     bundle = ROOT / "dist" / ("SubtitleFlow.app" if sys.platform == "darwin" else "SubtitleFlow")
-    gate(bundle, audit)
+    gate(bundle, audit, inventory_only=review_build)
     out = ROOT / "dist/installers"
     out.mkdir(exist_ok=True)
     name = f"SubtitleFlow-{__version__}-{platform_key()}"
@@ -74,7 +74,7 @@ FILE0="app.zip"
 FILE1="install.ps1"
 """
         sed_path = stage / "installer.sed"
-        sed_path.write_text(sed, encoding="utf-8")
+        sed_path.write_text(sed, encoding="ascii")
         subprocess.run(["iexpress.exe", "/N", "/Q", str(sed_path)], check=True)
         if not installer.exists():
             raise RuntimeError("IExpress did not create the installer")
@@ -87,5 +87,7 @@ FILE1="install.ps1"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--audit", type=Path, required=True)
-    package(parser.parse_args().audit)
+    parser.add_argument("--audit", type=Path, default=ROOT / "legal/release-audit.json")
+    parser.add_argument("--review-build", action="store_true", help="Create an installer for testing, not a compliance-approved release")
+    args = parser.parse_args()
+    package(args.audit, args.review_build)
