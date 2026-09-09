@@ -13,9 +13,8 @@ Do not add explanations, merge items, or return empty translations."""
 
 
 def atomic_json(path: Path, value):
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    from .safety import atomic_write
+    atomic_write(path, json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8"))
 
 
 def translate(cues, client, batch_size, cache_path: Path, progress=lambda done, total: None):
@@ -28,7 +27,8 @@ def translate(cues, client, batch_size, cache_path: Path, progress=lambda done, 
     saved = {}
     if cache_path.exists():
         try:
-            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            from .safety import read_json
+            data = read_json(cache_path)
             if data.get("fingerprint") == fingerprint:
                 saved = {int(k): v for k, v in data["translations"].items()
                          if isinstance(v, str) and v.strip() and "\n\n" not in v and "\r" not in v}

@@ -46,7 +46,7 @@ class APItests(unittest.TestCase):
 
 class UpdateTests(unittest.TestCase):
     def test_disabled(self):
-        with patch("urllib.request.urlopen") as mocked:
+        with patch("subtitleflow.updates.open_update") as mocked:
             self.assertIsNone(updates.check(""))
             mocked.assert_not_called()
 
@@ -58,7 +58,7 @@ class UpdateTests(unittest.TestCase):
     def test_checksum(self):
         with tempfile.TemporaryDirectory() as tmp:
             release = updates.Release("1.0.0", "https://github.com/a/b/releases/download/v1/a.exe", "0" * 64, "a.exe")
-            with patch("urllib.request.urlopen", return_value=io.BytesIO(b"broken")):
+            with patch("subtitleflow.updates.open_update", return_value=io.BytesIO(b"broken")):
                 with self.assertRaises(ValueError):
                     updates.download(release, Path(tmp), threading.Event())
             self.assertFalse((Path(tmp) / "a.exe").exists())

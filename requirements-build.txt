@@ -13,3 +13,7 @@ packaging==26.3
 pefile==2024.8.26; sys_platform == "win32"
 setuptools==84.0.0
 macholib==1.16.4; sys_platform == "darwin"
+
+cryptography==50.0.1
+cffi==2.1.1
+pycparser==3.0

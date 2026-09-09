@@ -43,12 +43,15 @@ def parse(text: str) -> list[Cue]:
             raise ValueError(f"第 {position} 条正文为空")
         if cues and start < cues[-1].start:
             raise ValueError(f"第 {position} 条开始时间倒序，请先修正原字幕")
+        if len(cues) >= 100000 or len(body) > 1000000:
+            raise ValueError("字幕条目数量或单条文字长度超过上限")
         cues.append(Cue(int(lines[0]), start, end, body))
     return cues
 
 
 def read(path: Path) -> list[Cue]:
-    data = path.read_bytes()
+    from .safety import read_bytes, SRT_LIMIT
+    data = read_bytes(path, SRT_LIMIT)
     encodings = ("utf-16",) if data.startswith((b"\xff\xfe", b"\xfe\xff")) else ("utf-8-sig", "gb18030", "big5")
     for encoding in encodings:
         try:
@@ -74,6 +77,5 @@ def render(cues: list[Cue]) -> str:
 
 
 def write(path: Path, cues: list[Cue]):
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(render(cues), encoding="utf-8")
-    temporary.replace(path)
+    from .safety import atomic_write
+    atomic_write(path, render(cues).encode("utf-8"))

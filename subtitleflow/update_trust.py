@@ -1,0 +1,1 @@
+TRUSTED_UPDATE_KEYS = {'release-v1': '0a25c1469deaf27fdbb4586e903f371fe1858e20ef043df6d0f23f01f527d5fb'}

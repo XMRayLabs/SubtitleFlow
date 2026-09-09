@@ -1,9 +1,14 @@
 import argparse
+import hashlib
+import base64
+import os
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import json
 from pathlib import Path
 import re
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--use-local-key", action="store_true")
 parser.add_argument("--repo", required=True)
 parser.add_argument("--version", required=True)
 parser.add_argument("--assets", type=Path, required=True)
@@ -16,6 +21,14 @@ if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
 platforms = {}
 for path in args.assets.glob("*.asset.json"):
     asset = json.loads(path.read_text(encoding="utf-8"))
+    filename = asset["file"]
+    if Path(filename).name != filename or "\\" in filename or ":" in filename:
+        raise ValueError("Unsafe installer filename")
+    installer = args.assets / filename
+    with installer.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if digest != asset["sha256"]:
+        raise ValueError("Installer digest does not match metadata")
     if asset["version"] != args.version:
         raise ValueError("Asset version mismatch")
     if asset["platform"] in platforms:
@@ -25,4 +38,27 @@ for path in args.assets.glob("*.asset.json"):
         "sha256": asset["sha256"]}
 if not platforms:
     raise ValueError("No installer metadata found")
-args.output.write_text(json.dumps({"version": args.version, "platforms": platforms}, indent=2), encoding="utf-8")
+payload = json.dumps({"version": args.version, "platforms": platforms}, separators=(",", ":")).encode()
+seed = os.environ.get("SUBTITLEFLOW_UPDATE_SIGNING_KEY")
+key_id = os.environ.get("SUBTITLEFLOW_UPDATE_KEY_ID")
+if args.use_local_key:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from subtitleflow.gui import native_keyring
+    seed = native_keyring().get_password("SubtitleFlow-release", "ed25519-v1")
+    key_id = "release-v1"
+    if not seed:
+        raise ValueError("Local signing key unavailable")
+if not seed or not key_id:
+    # Keep installer drafts usable, but never publish an unsigned update.json.
+    print("Signing key not configured; update.json intentionally omitted")
+else:
+    key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(seed))
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from subtitleflow.update_trust import TRUSTED_UPDATE_KEYS
+    if TRUSTED_UPDATE_KEYS.get(key_id) != key.public_key().public_bytes_raw().hex():
+        raise ValueError("Signing key does not match embedded public key")
+    envelope = {"key_id": key_id, "payload": base64.b64encode(payload).decode(),
+                "signature": base64.b64encode(key.sign(payload)).decode()}
+    args.output.write_text(json.dumps(envelope, indent=2), encoding="utf-8")

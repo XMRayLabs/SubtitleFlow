@@ -1,5 +1,10 @@
 from dataclasses import dataclass
 import hashlib
+import base64
+import tempfile
+import time
+from .safety import bounded_response, response_json, no_links
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 import json
 from pathlib import Path
 import platform
@@ -11,6 +16,56 @@ import urllib.request
 from . import __version__
 
 DEFAULT_REPO = "XMRayLabs/SubtitleFlow"
+# Provision an offline signing key before enabling release updates. Never trust a key from the server.
+from .update_trust import TRUSTED_UPDATE_KEYS
+MAX_INSTALLER = 512 * 1024 * 1024
+
+
+def verify_manifest(raw):
+    envelope = json.loads(raw)
+    public = TRUSTED_UPDATE_KEYS.get(envelope.get("key_id"))
+    if not public:
+        raise ValueError("更新签名公钥尚未配置或不受信任，已阻止自动更新")
+    try:
+        payload = base64.b64decode(envelope["payload"], validate=True)
+        signature = base64.b64decode(envelope["signature"], validate=True)
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(public)).verify(signature, payload)
+        return json.loads(payload)
+    except Exception as exc:
+        raise ValueError("更新清单签名无效") from exc
+
+
+@dataclass(frozen=True)
+class Downloaded:
+    path: Path
+    sha256: str
+
+
+def verify_install(downloaded):
+    path = no_links(downloaded.path)
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(262144):
+            size += len(chunk)
+            if size > MAX_INSTALLER:
+                raise ValueError("安装包超过大小上限")
+            digest.update(chunk)
+    if digest.hexdigest() != downloaded.sha256:
+        raise ValueError("安装包在下载后被更改，已阻止安装")
+    return path
+
+
+class SecureRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme != "https":
+            raise ValueError("更新下载禁止降级至非 HTTPS 地址")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def open_update(url, timeout):
+    return urllib.request.build_opener(SecureRedirect()).open(url, timeout=timeout)
+
 
 
 def version(value):
@@ -49,8 +104,8 @@ def check(repo: str, current=__version__):
     request = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest",
                                      headers={"Accept": "application/vnd.github+json", "User-Agent": "SubtitleFlow"})
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            release = json.load(response)
+        with open_update(request, timeout=20) as response:
+            release = response_json(response)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             exc.close()
@@ -62,8 +117,8 @@ def check(repo: str, current=__version__):
     manifests = [a for a in assets if a["name"] == "update.json"]
     if len(manifests) != 1 or not allowed_url(manifests[0]["browser_download_url"], repo):
         raise ValueError("发布版本缺少有效 update.json")
-    with urllib.request.urlopen(manifests[0]["browser_download_url"], timeout=20) as response:
-        data = json.load(response)
+    with open_update(manifests[0]["browser_download_url"], timeout=20) as response:
+        data = verify_manifest(bounded_response(response, 1024 * 1024))
     if version(data["version"]) != version(release["tag_name"]):
         raise ValueError("更新清单版本不一致")
     asset = data["platforms"].get(platform_key())
@@ -80,22 +135,33 @@ def check(repo: str, current=__version__):
 
 
 def download(release: Release, directory: Path, cancel, progress=lambda n: None):
+    directory = no_links(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix="verified-", dir=directory))
+    if Path(release.filename).name != release.filename or ":" in release.filename or "\\" in release.filename:
+        raise ValueError("安装包文件名不安全")
     destination = directory / release.filename
     temporary = destination.with_suffix(destination.suffix + ".download")
     digest, size = hashlib.sha256(), 0
+    deadline = time.monotonic() + 600
     try:
-        with urllib.request.urlopen(release.url, timeout=30) as response, temporary.open("wb") as stream:
-            while chunk := response.read(1024 * 256):
+        with open_update(release.url, timeout=30) as response, temporary.open("wb") as stream:
+            while chunk := getattr(response, 'read1', response.read)(1024 * 256):
                 if cancel.is_set():
                     raise RuntimeError("更新下载已取消")
+                if time.monotonic() > deadline:
+                    raise ValueError("更新下载超过总时限")
                 size += len(chunk)
+                if size > MAX_INSTALLER:
+                    raise ValueError("安装包超过 512 MiB 上限")
                 digest.update(chunk)
                 stream.write(chunk)
                 progress(size)
         if digest.hexdigest() != release.sha256:
             raise ValueError("安装包 SHA-256 校验失败")
         temporary.replace(destination)
-        return destination
+        return Downloaded(destination, release.sha256)
     finally:
         temporary.unlink(missing_ok=True)
+        if not destination.exists():
+            directory.rmdir()

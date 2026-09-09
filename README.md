@@ -1,108 +1,101 @@
 # SubtitleFlow
 
-**专有软件 · Copyright © 2026 XMRayLabs. All rights reserved.**
+**字幕合并、简体中文翻译与 Final Cut Pro 字幕时间线导出。**
 
-字幕合并、简体中文翻译与 FCPXML 转换，支持 Windows 和 macOS。
-项目源码可查看，但未经书面许可不得复制分发、转售或修改专有部分；安装运行备份与第三方许可证例外详见 [EULA](legal/EULA.md)。
+SubtitleFlow 是一款适用于 Windows 和 macOS 的中文桌面工具。将零碎字幕整理成更完整的句子，再通过自己选择的 AI 服务翻译；也可以直接将 SRT 转换为 FCPXML。所有操作集中在一个主窗口，支持批量处理。
 
-## 下载与自动构建
+[下载安装](https://github.com/XMRayLabs/SubtitleFlow/releases) · [使用指南](docs/USER_GUIDE.md) · [反馈问题](https://github.com/XMRayLabs/SubtitleFlow/issues)
 
-每次推送 main 自动构建 Windows x64、macOS Apple Silicon、macOS Intel。
-在 GitHub Actions 的 Desktop builds 页面下载对应系统 artifact，解压里面的应用 ZIP，打开程序即可，无需安装 Python 或依赖。
-推送 v开头版本标签会在三个平台验证成功后生成 GitHub Release 草稿。草稿仅供发布审核，不自动提供给用户更新。
-安装包与 update.json 自动上传到发布草稿。完成许可证审核、签名与安装测试后发布稳定版，客户端启动检查和手动检查即可发现版本。
+## 功能
 
-官方更新仓库：XMRayLabs/SubtitleFlow。软件启动自动检查，用户确认后下载并校验 SHA-256，当前任务结束后启动安装。macOS 打开 DMG 后由用户拖入 Applications 完成替换，不承诺静默安装。
+- **智能合并**：设置目标时长、静音间隔与容差，优先保留完整句子；自动整理相邻重复的加粗等样式标签。
+- **AI 翻译**：兼容 OpenAI 格式接口，自定义地址、密钥和模型，翻译为简体中文；默认每批 20 条。
+- **批量处理**：支持拖入多个 SRT，查看进度、取消、重试和恢复未完成任务。单个文件失败不阻塞其他文件。
+- **FCPXML 导出**：将字幕导出为 Final Cut Pro 可编辑标题，支持多种常用帧率。
+- **保留原始字幕**：每次任务创建独立目录，保留原始副本、处理结果和任务报告，不覆盖输入文件。
 
-## 本机启动
+## 下载与安装
 
-已配置虚拟环境的 Windows 工作目录：
+| 系统 | 安装包 | 安装方式 |
+| --- | --- | --- |
+| Windows x64 | `.exe` | 运行安装程序，使用桌面快捷方式启动 |
+| Mac Apple Silicon | `macos-arm64.dmg` | 打开后将应用拖入 Applications |
+| Mac Intel | `macos-x86_64.dmg` | 打开后将应用拖入 Applications |
 
-    .\.venv\Scripts\python.exe -m subtitleflow
+安装包内置 Python、Qt 和运行依赖，用户无需另行安装开发环境。使用 ZIP 便携版时，请保留整个应用目录。
 
-首次安装（建议官方 CPython 3.14；不要使用 conda 运行时制作正式发布包）：
+**发布状态：**当前产物为发布候选稿，签名、公证和最终分发验收尚未完成。草稿仅仓库维护者可见；测试构建可从 [GitHub Actions](https://github.com/XMRayLabs/SubtitleFlow/actions) 下载。Windows x64 和两种 Mac 架构已有自动构建与独立启动测试；macOS 13 为构建目标，最低系统版本仍需实机验收。
 
-    python -m venv .venv
-    # Windows: .venv\Scripts\activate
-    # macOS: source .venv/bin/activate
-    python -m pip install -r requirements-build.txt
-    python -m pip install --no-deps --no-build-isolation -e .
-    python -m subtitleflow
+## 快速开始
 
-提供仅合并、仅翻译、合并后翻译。将 SRT 拖入列表，选择参数和输出目录，然后开始。仅合并且关闭 AI 时无需 API。API 地址填写服务商的 Base URL（通常以 /v1 结尾），模型名称由服务商提供。兼容 chat/completions，不要求服务商支持 JSON response_format。
+1. 启动软件，将 SRT 文件拖入列表。
+2. 选择「仅合并」「仅翻译」「合并后翻译」或「SRT → FCPXML」。
+3. 根据需要调整参数；翻译时打开「翻译设置」，填写 API 地址和密钥，加载并选择模型。
+4. 选择输出目录，点击开始。完成后打开结果目录。
 
-默认每批 20 条字幕，不是正文物理行数。API 测试会发送一次最小请求。AI 辅助断句也会产生接口调用。请求顺序执行，临时故障重试，返回结构无效时重试一次；超过模型限制自动缩小批次。取消时等待正在进行的 HTTP 操作退出，单请求超时为 60 秒。
+默认合并目标为 **10 秒**，静音阈值为 **3 秒**。相邻字幕间隔达到静音阈值时分组；完整句子优先，连续无标点字幕采用软上限兜底，不拆分单条原字幕。
 
-## 合并规则
+## API 配置
 
-目标 10 秒、静音 3 秒、容差 25% 均可调。间隔达到静音阈值强制分组；静音仅由字幕时间轴估算。
-达到目标并句完就结束；有明确句末时完整句子优先，可以超过软上限。没有可靠句末时，达到目标后优先在停顿处结束；连续无标点字幕按软上限（10 秒为 13 秒）在原条目边界兜底。原单条不截断。
-中英文句末标点与常见缩写使用本地规则判断。AI 模式通过原始条目 ID 给出句末边界，不修改正文、不跨静音阈值，仍不能保证所有语义判断正确。
+支持 OpenAI 兼容的聊天接口，服务费用由所选 API 提供方收取。模型下拉列表可以自动加载，也允许手动填写。
+
+| 配置项 | 说明 |
+| --- | --- |
+| Base URL | 服务商提供的地址，常见格式为 `https://example.com/v1` |
+| API Key | 对应服务商的密钥，默认仅保存在当前会话 |
+| 模型 | 加载列表后选择，或手动输入模型 ID |
+| 每批条目数 | 默认 20，可按模型上下文大小调整 |
+
+本地 Open WebUI 示例：`https://127.0.0.1:8081/api`。如果使用本机自签名证书，可在设置中开启对应选项；此选项仅适用于回环地址。HTTP 接口支持保留。
 
 ## 输出与恢复
 
-每次创建唯一任务目录，包含 originals、merged、translated 及 report.json；仅单步处理只创建对应输出目录。
-originals 是原文件字节副本。同名文件自动追加编号。正式译文只有在校验完整后才生成。
-.progress 保存已完成译文，模型、输入、参数或提示词版本变化后不复用旧缓存。重试未完成文件复用当前任务；重启后选择“恢复任务”并选择 report.json 所在目录。恢复使用任务原始副本，避免依赖移动后的源文件。
+完整的「合并后翻译」任务包含：
 
-配置保存于系统应用数据目录。密钥默认不落盘；勾选记住后只使用 Windows 凭据管理器或 macOS 钥匙串。取消勾选并保存设置时删除已保存密钥。字幕及译文保留在本地任务目录，翻译及 AI 断句时会发送到用户配置的 API。
+```text
+任务目录/
+├── originals/     原始 SRT 副本
+├── merged/        合并后的 SRT
+├── translated/    翻译后的 SRT
+├── fcpxml/        可选的 FCPXML
+├── .progress/     翻译恢复缓存
+└── report.json    任务报告
+```
 
-## 版权与许可
+例如 10 个文件全部成功处理，会生成 10 个原始副本、10 个合并字幕和 10 个翻译字幕。恢复任务需要保留整个任务目录；原始副本缺失时请新建任务。恢复报告不会自动更换当前 API 地址或模型。
 
-软件不主张输入和输出字幕的权利，不额外限制商用，不要求署名，不添加水印。
-用户应具备原内容的相应授权，并核实 API 服务允许其使用方式；软件不保证将第三方内容版权转移给视频发布者。
-详见 legal/OUTPUT_RIGHTS.md、legal/THIRD_PARTY_NOTICES.md、legal/LGPL_REPLACEMENT.md。
+为避免异常文件耗尽资源，单个 SRT 上限为 32 MiB，单任务最多 10,000 个文件。更详细的合并规则、帧率和格式说明见[使用指南](docs/USER_GUIDE.md)。FCPXML 已做结构测试，实际 Final Cut Pro 导入仍需验收。
 
-项目自有代码采用专有 EULA，详见 LICENSE 和 legal/EULA.md。公开仓库不构成开源授权，第三方组件仍适用各自许可。
-正式分发必须通过实际依赖和二进制审核；开发构建不等于已完成商业发布验收。
+## 更新与卸载
 
-## 测试与构建
+软件可检查 GitHub 稳定版本。安全更新要求受信任的签名清单，下载完成和安装前分别验证文件摘要；处理任务结束后由用户确认安装。**发布签名密钥尚未配置时，自动更新安装不可用。**Mac 更新仍需拖入 Applications，不进行静默安装。
 
-    python -m unittest discover -s tests -v
-    python -c "from pathlib import Path; Path('build').mkdir(exist_ok=True)"
-    python -m tests.smoke_gui
-    python tools/collect_licenses.py --fetch-sources
-    python -m PyInstaller --noconfirm SubtitleFlow.spec
+Windows：退出软件，在「设置 → 应用 → 已安装的应用 → SubtitleFlow」中卸载。0.1.0 用户覆盖安装 0.1.1 或更新版本后可使用系统卸载入口。
 
-Windows 输出 dist/SubtitleFlow/SubtitleFlow.exe；macOS 输出 dist/SubtitleFlow.app。目录必须完整保留，不能仅复制 exe。Qt 动态库可替换；不使用 onefile。
+Mac：退出软件，将 Applications 中的 SubtitleFlow 移到废纸篓。
 
-正式打包步骤详见 RELEASE.md。未配置 GitHub 仓库时不检查更新。真实 API 翻译质量需使用用户自己的服务验证，测试使用模拟响应，不会调用付费接口。
+卸载保留字幕输出、设置、已保存密钥和旧版本备份。若需清除密钥，请先在翻译设置取消「记住密钥」并保存。
 
-## 模型下拉与本地 Open WebUI
+## 隐私与授权
 
-填写 API 地址和密钥后自动加载模型列表，也可点击“加载模型”；下拉框允许手动输入不在列表中的模型。
-根地址默认补 /v1，自定义路径保留。对于本机根地址，会通过不带密钥的 /openapi.json 检测 Open WebUI，并改用 /api。
+字幕和任务记录默认保存在本机。翻译及 AI 辅助断句会把相关字幕发送到用户配置的 API；开启记住密钥后使用系统凭据存储。更新检查连接 GitHub。
 
-本机示例：https://127.0.0.1:8081/api。该服务使用自签名证书时，可勾选“允许本机自签名证书”；选项默认关闭，且仅允许 localhost/回环 IP。公网 HTTPS 始终正常验证证书。本机请求绕过系统代理，不会自动降级到 HTTP。
-Open WebUI 的 API Key 需在该服务中创建/取得；401 表示尚未提供有效密钥。填写后加载模型，再测试连接。
+SubtitleFlow 专有部分采用 [EULA](legal/EULA.md)，未经许可不得复制分发、转售或修改；第三方组件保留各自许可证授予的权利。公开源码不代表开源授权。
 
-## SRT → FCPXML
+**软件不主张用户输入或输出字幕的权利，不额外限制输出商用，不要求署名，不添加水印。**用户应拥有原内容的相应授权，并遵守所选 API 服务条款。详见[字幕权益说明](legal/OUTPUT_RIGHTS.md)与[第三方声明](legal/THIRD_PARTY_NOTICES.md)。
 
-处理模式选择“SRT → FCPXML（仅转换）”，添加一个或多个 SRT 后开始；无需 API。
-其他处理模式可以勾选“处理完成后同时导出 FCPXML”，导出该流程最终生成的字幕（合并模式取合并结果，翻译模式取译文）。
-结果位于任务目录 fcpxml，每个 SRT 对应一个 FCPXML。
+## 开发与发布
 
-选择与你的 Final Cut Pro 项目一致的帧率，支持 23.976/24/25/29.97/30/50/59.94/60；默认 25 fps。
-默认 1920×1080，字幕通过 FCP 自带 Basic Title 表示为可编辑标题，白色、底部居中。FCPXML 不附带字体或 Motion 模板。
-时间轴从 0 开始，字幕边界四舍五入到最近帧，极短条目至少保留一帧；重叠条目使用不同连接轨道。SRT 自身时间不被修改。
-支持将 b/i 样式转换为标题文字样式，其他标签去除但保留文字。合并 SRT 会折叠重复的相邻 b/i/u 标签，保留原来的样式范围。
+使用官方 CPython 3.14.6，在虚拟环境中安装锁定依赖：
 
-在 Final Cut Pro 中使用“文件 → 导入 → XML”，导入生成的独立字幕项目；可将标题复制到视频项目。普通 SRT 也可使用 FCP 的字幕导入功能。
-导出器使用 Python 标准库实现，符合 Apple FCPXML 1.7 结构；Windows 上完成 DTD 校验，尚未在实际 Final Cut Pro 上验收。
+```shell
+python -m pip --isolated install --require-hashes --only-binary=:all: -r requirements-bootstrap.lock
+python -m pip --isolated install --require-hashes --only-binary=:all: -r requirements-build.lock
+python -m pip install --no-deps --no-build-isolation -e .
+python -m unittest discover -s tests -v
+python -m subtitleflow
+```
 
-格式参考：https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/LegacyDTDsFinalCutPro/FCPXMLDTDv1.7/FCPXMLDTDv1.7.html
+CI 自动检查 Python 组件漏洞、执行测试并构建三个平台。发布流程与签名配置见 [RELEASE.md](RELEASE.md)，安全边界见 [SECURITY.md](SECURITY.md)。
 
-## 现代单窗口界面与免依赖运行
-
-主窗口仅显示文件队列、当前模式必要参数、输出目录和处理按钮。
-“翻译设置”弹窗用于 API/密钥/模型配置；“高级选项”默认收起；更新和恢复放在“更多”菜单。
-用户运行 dist/SubtitleFlow/SubtitleFlow.exe，无需安装 Python、pip、Qt 或其他运行依赖。必须保留整个目录，不能只复制 EXE。
-Windows 本机已在清空 Python/Conda/Qt 环境变量、PATH 仅保留系统目录的条件下验证独立运行，同时测试合并、FCPXML、TLS 和系统凭据后端导入。
-这不是全新虚拟机验收；实际操作系统最低版本仍需对应系统实测。
-
-macOS 构建产物是独立 .app，DMG 安装流程为拖入 Applications，同样内含运行时。分别配置 Intel 和 Apple Silicon 构建，最低目标 macOS 13。
-Windows x64、Mac Apple Silicon 和 Mac Intel 已通过 GitHub Actions 构建、44 项单元测试、GUI 冒烟测试及清除开发环境后的独立应用启动验证。Mac 的实际交互安装、签名、公证以及最终依赖许可审核尚待完成；macOS 13 最低版本还需单独实测。
-
-## Windows 卸载
-
-从 0.1.1 安装包开始，在 Windows「设置 → 应用 → 已安装的应用」找到 SubtitleFlow 并卸载。先退出软件。卸载保留字幕输出、用户设置、已保存密钥及旧版本备份。若需清除密钥，先在翻译设置取消记住密钥并保存。旧版用户覆盖安装新版后即可使用系统卸载入口。
+Copyright © 2026 XMRayLabs. All rights reserved.

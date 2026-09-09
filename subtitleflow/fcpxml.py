@@ -113,6 +113,5 @@ def render(cues, name, options=ExportOptions()):
 
 def write(path: Path, cues, options=ExportOptions()):
     content = render(cues, path.stem, options)
-    temporary = path.with_suffix(".fcpxml.tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.replace(path)
+    from .safety import atomic_write
+    atomic_write(path, content.encode("utf-8"))

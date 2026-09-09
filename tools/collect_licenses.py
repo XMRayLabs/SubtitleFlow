@@ -14,6 +14,9 @@ LEGAL = ROOT / "legal"
 COMPONENTS = {
     "PySide6-Essentials": ("6.11.2", "LGPL-3.0-only"),
     "shiboken6": ("6.11.2", "LGPL-3.0-only"),
+    "cryptography": ("50.0.1", "Apache-2.0 OR BSD-3-Clause"),
+    "cffi": ("2.1.1", "MIT-0"),
+    "pycparser": ("3.0", "BSD-3-Clause"),
     "keyring": ("25.6.0", "MIT"),
     "jaraco.classes": ("3.4.0", "MIT"),
     "jaraco.context": ("6.1.2", "MIT"),
@@ -74,10 +77,14 @@ def collect(fetch=False):
         runtime_license = Path(sys.base_prefix) / "LICENSE"
     if runtime_license.exists():
         shutil.copyfile(runtime_license, licenses / "PYTHON-RUNTIME-LICENSE.txt")
+    source_lock = json.loads((LEGAL / "source-lock.json").read_text(encoding="utf-8"))
     records = []
     sources = LEGAL / "sources"
     sources.mkdir(exist_ok=True)
     for name, url in SOURCES.items():
+        expected = source_lock.get(name)
+        if not expected or expected["url"] != url:
+            raise RuntimeError("Source missing from reviewed lock: " + name)
         archive = sources / name
         if fetch and not archive.exists():
             print(f"Downloading {name}", flush=True)
@@ -86,6 +93,8 @@ def collect(fetch=False):
                 shutil.copyfileobj(response, stream)
             part.replace(archive)
         if archive.exists():
+            if sha(archive) != expected["sha256"]:
+                raise RuntimeError("Source SHA-256 mismatch: " + name)
             # Extract text license notices only, never execute or extract arbitrary source paths.
             with tarfile.open(archive) as tar:
                 for member in tar:

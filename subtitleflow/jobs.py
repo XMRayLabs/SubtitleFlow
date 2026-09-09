@@ -7,6 +7,7 @@ import shutil
 import threading
 import uuid
 from . import srt, fcpxml
+from .safety import safe_tree, read_json, read_bytes, atomic_write, SRT_LIMIT
 from .api import Client, APIConfig, Cancelled
 from .merge import MergeOptions, merge
 from .translate import translate, ai_boundaries, atomic_json
@@ -43,8 +44,8 @@ class Job:
             self.api.endpoint()
         settings = {"options": asdict(self.options), "base_url": self.api.base_url, "model": self.api.model}
         if self.resume:
-            self.root = self.resume.resolve()
-            report = json.loads((self.root / "report.json").read_text(encoding="utf-8"))
+            self.root = safe_tree(self.resume).resolve()
+            report = read_json(self.root / "report.json")
             report["settings"]["options"].setdefault("export_fcpxml", False)
             report["settings"]["options"].setdefault("fps", "25")
             if report["settings"] != settings:
@@ -63,6 +64,9 @@ class Job:
                     name = f"{stem}_{count}.srt"
                 used.add(name.casefold())
                 report["files"].append({"source": str(path), "name": name, "status": "pending"})
+        safe_tree(self.root)
+        if len(report["files"]) > 10000:
+            raise ValueError("单个任务最多支持 10000 个文件")
         names = set()
         for item in report["files"]:
             name = item.get("name", "")
@@ -95,9 +99,12 @@ class Job:
                 atomic_json(self.root / "report.json", report)
                 self.event("file", index, "处理中", "")
                 original = self.root / "originals" / item["name"]
+                safe_tree(self.root)
                 if not original.exists():
-                    shutil.copyfile(item["source"], original)
-                raw_hash = hashlib.sha256(original.read_bytes()).hexdigest()
+                    if self.resume:
+                        raise ValueError("任务原始副本缺失，请重新添加字幕建立新任务")
+                    atomic_write(original, read_bytes(Path(item["source"]), SRT_LIMIT))
+                raw_hash = hashlib.sha256(read_bytes(original, SRT_LIMIT)).hexdigest()
                 if item.get("sha256") and item["sha256"] != raw_hash:
                     raise ValueError("任务原始副本已被修改，请新建任务")
                 item["sha256"] = raw_hash

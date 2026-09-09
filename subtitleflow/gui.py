@@ -17,6 +17,7 @@ from .api import APIConfig, Client
 from .jobs import Job, JobOptions
 from .merge import MergeOptions
 from . import updates
+from .safety import safe_tree, read_json
 
 
 def app_data():
@@ -327,14 +328,20 @@ class Window(QMainWindow):
         if not directory:
             return
         try:
-            root = Path(directory)
-            report = json.loads((root / "report.json").read_text(encoding="utf-8"))
+            root = safe_tree(Path(directory))
+            report = read_json(root / "report.json")
+            if len(report["files"]) > 10000:
+                raise ValueError("任务超过 10000 个文件上限")
             self.clear_files()
             self.apply_options(report["settings"]["options"])
-            self.base.setText(report["settings"]["base_url"])
-            self.model.setCurrentText(report["settings"]["model"])
+            # A report must never redirect the current API credential to another server.
+            if report["settings"]["base_url"] != self.base.text().strip() or report["settings"]["model"] != self.model.currentText().strip():
+                raise ValueError("任务 API 地址或模型与当前设置不同，请在翻译设置中自行核对后重试")
             for item in report["files"]:
-                self.paths.append(Path(item["source"]))
+                name = item["name"]
+                if Path(name).name != name or ":" in name or "\\" in name:
+                    raise ValueError("任务文件名不安全")
+                self.paths.append(root / "originals" / name)
                 row = self.table.rowCount()
                 self.table.insertRow(row)
                 for col, text in enumerate((item["source"], "已完成" if item["status"] == "done" else "待重试", item.get("error", ""))):
@@ -464,7 +471,7 @@ class Window(QMainWindow):
             if QMessageBox.question(self, "发现新版本", f"发现 {release.version}，是否下载并在任务结束后安装？") != QMessageBox.Yes:
                 return
             self.update_busy = True
-            self.launch(lambda _: updates.download(release, app_data() / "updates", threading.Event()),
+            self.launch(lambda _: updates.download(release, app_data() / "updates", self.cancel),
                         downloaded, failed)
         def downloaded(path):
             self.update_busy = False
@@ -489,9 +496,14 @@ class Window(QMainWindow):
         if any(worker.isRunning() for worker in self.workers):
             QTimer.singleShot(200, self.install_update)
             return
-        path = self.pending_update
+        downloaded = self.pending_update
         self.pending_update = None
         if QMessageBox.question(self, "安装更新", "安装包校验通过，现在关闭软件并打开安装包？") == QMessageBox.Yes:
+            try:
+                path = updates.verify_install(downloaded)
+            except Exception as exc:
+                self.error(str(exc))
+                return
             if QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
                 self.close()
             else:

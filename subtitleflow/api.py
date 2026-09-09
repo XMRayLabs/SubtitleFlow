@@ -7,6 +7,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from .safety import response_json
 
 
 class Cancelled(Exception):
@@ -108,7 +109,7 @@ class Client:
         request = urllib.request.Request(raw + "/openapi.json", headers={"Accept": "application/json"})
         try:
             with self.opener().open(request, timeout=8) as response:
-                schema = json.load(response)
+                schema = response_json(response, self.cancel)
             paths = schema.get("paths", {}) if isinstance(schema, dict) else {}
             if "/api/models" in paths and "/api/chat/completions" in paths:
                 return raw + "/api"
@@ -131,7 +132,7 @@ class Client:
         try:
             request = urllib.request.Request(url, headers=headers)
             with self.opener().open(request, timeout=min(self.config.timeout, 20)) as response:
-                data = json.load(response)
+                data = response_json(response, self.cancel)
             self.check()
         except urllib.error.HTTPError as exc:
             code = exc.code
@@ -145,6 +146,8 @@ class Client:
             raise InvalidResponse("模型接口未返回 JSON，请检查 API 路径是否正确") from None
         if not isinstance(data, dict) or not isinstance(data.get("data"), list):
             raise InvalidResponse("模型接口应返回包含 data 数组的兼容响应")
+        if len(data["data"]) > 5000:
+            raise InvalidResponse("模型列表超过 5000 项上限")
         ids = []
         for item in data["data"]:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"].strip():
@@ -171,7 +174,7 @@ class Client:
             try:
                 request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
                 with self.opener().open(request, timeout=self.config.timeout) as response:
-                    data = json.load(response)
+                    data = response_json(response, self.cancel)
                 self.check()
                 choice = data["choices"][0]
                 if choice.get("finish_reason") == "length":
