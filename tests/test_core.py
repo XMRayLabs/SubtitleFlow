@@ -167,7 +167,7 @@ class JobTests(unittest.TestCase):
             with patch("subtitleflow.jobs.Client", FakeClient):
                 output = Job(paths, root / "out", JobOptions(), APIConfig("https://example.test/v1", "secret", "test"),
                              threading.Event()).run()
-                for folder in ("originals", "merged", "translated"):
+                for folder in ("originals", "合并后的srt", "翻译后的srt"):
                     self.assertEqual(len(list((output / folder).glob("*.srt"))), 10)
                 self.assertEqual((output / "originals/字幕.srt").read_bytes(), paths[0].read_bytes())
                 self.assertNotIn("secret", (output / "report.json").read_text())
@@ -183,8 +183,8 @@ class JobTests(unittest.TestCase):
             path = Path(tmp) / "a.srt"
             path.write_text(render([cue(0, 1, "A.")]), encoding="utf-8")
             output = Job([path], Path(tmp), JobOptions(mode="merge"), APIConfig("", "", ""), threading.Event()).run()
-            self.assertTrue((output / "merged/a.srt").exists())
-            self.assertFalse((output / "translated").exists())
+            self.assertTrue((output / "合并后的srt/a.srt").exists())
+            self.assertFalse((output / "翻译后的srt").exists())
 
 
 if __name__ == "__main__":

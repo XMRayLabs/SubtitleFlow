@@ -60,9 +60,9 @@ class FCPXMLTests(unittest.TestCase):
             source = root / "a.srt"
             source.write_text(srt_render([Cue(1, 0, 1000, "Hello")]), encoding="utf-8")
             out = Job([source], root, JobOptions(mode="fcpxml"), APIConfig("", ""), threading.Event()).run()
-            self.assertTrue((out / "fcpxml/a.fcpxml").exists())
-            self.assertFalse((out / "merged").exists())
-            self.assertFalse((out / "translated").exists())
+            self.assertTrue((out / "转换后的fcpxml/a.fcpxml").exists())
+            self.assertFalse((out / "合并后的srt").exists())
+            self.assertFalse((out / "翻译后的srt").exists())
 
     def test_merge_and_export(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -70,8 +70,8 @@ class FCPXMLTests(unittest.TestCase):
             source = root / "a.srt"
             source.write_text(srt_render([Cue(1, 0, 1000, "<b>Hello</b>"), Cue(2, 1000, 2000, "<b>world.</b>")]), encoding="utf-8")
             out = Job([source], root, JobOptions(mode="merge", export_fcpxml=True), APIConfig("", ""), threading.Event()).run()
-            self.assertIn("<b>Hello world.</b>", (out / "merged/a.srt").read_text(encoding="utf-8"))
-            self.assertEqual(len(ET.parse(out / "fcpxml/a.fcpxml").findall(".//title")), 1)
+            self.assertIn("<b>Hello world.</b>", (out / "合并后的srt/a.srt").read_text(encoding="utf-8"))
+            self.assertEqual(len(ET.parse(out / "转换后的fcpxml/a.fcpxml").findall(".//title")), 1)
 
 
 if __name__ == "__main__":

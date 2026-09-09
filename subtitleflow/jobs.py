@@ -75,14 +75,22 @@ class Job:
                     or name.casefold() in names):
                 raise ValueError("任务报告包含不安全或重复的输出文件名")
             names.add(name.casefold())
+        if self.resume:
+            # Migrate whole result folders, including completed files; never overwrite a destination.
+            for old, new in (("merged", "合并后的srt"), ("translated", "翻译后的srt"), ("fcpxml", "转换后的fcpxml")):
+                previous, destination = self.root / old, self.root / new
+                if previous.exists():
+                    if destination.exists():
+                        raise ValueError("任务中同时存在新旧结果目录，请先整理后恢复")
+                    previous.rename(destination)
         for folder in ("originals", ".progress"):
             (self.root / folder).mkdir(exist_ok=True)
         if self.options.mode in ("merge", "both"):
-            (self.root / "merged").mkdir(exist_ok=True)
+            (self.root / "合并后的srt").mkdir(exist_ok=True)
         if self.options.mode in ("translate", "both"):
-            (self.root / "translated").mkdir(exist_ok=True)
+            (self.root / "翻译后的srt").mkdir(exist_ok=True)
         if self.options.export_fcpxml or self.options.mode == "fcpxml":
-            (self.root / "fcpxml").mkdir(exist_ok=True)
+            (self.root / "转换后的fcpxml").mkdir(exist_ok=True)
         report["status"] = "running"
         atomic_json(self.root / "report.json", report)
         self.event("root", str(self.root))
@@ -112,16 +120,16 @@ class Job:
                 if self.options.mode in ("merge", "both"):
                     boundaries = ai_boundaries(cues, client, self.options.batch_size) if self.options.ai else None
                     cues = merge(cues, self.options.merge, boundaries)
-                    srt.write(self.root / "merged" / item["name"], cues)
+                    srt.write(self.root / "合并后的srt" / item["name"], cues)
                 if self.options.mode in ("translate", "both"):
                     cues = translate(cues, client, self.options.batch_size,
                                      self.root / ".progress" / (item["name"] + ".json"),
                                      lambda done, total: self.event("file", index, "翻译中", f"{done}/{total}"))
                     client.check()
-                    srt.write(self.root / "translated" / item["name"], cues)
+                    srt.write(self.root / "翻译后的srt" / item["name"], cues)
                 if self.options.export_fcpxml or self.options.mode == "fcpxml":
                     client.check()
-                    fcpxml.write(self.root / "fcpxml" / (Path(item["name"]).stem + ".fcpxml"), cues, fcpxml.ExportOptions(fps=self.options.fps))
+                    fcpxml.write(self.root / "转换后的fcpxml" / (Path(item["name"]).stem + ".fcpxml"), cues, fcpxml.ExportOptions(fps=self.options.fps))
                 item["status"] = "done"
                 self.event("file", index, "已完成", "")
             except Cancelled:
