@@ -4,7 +4,7 @@ import base64
 import tempfile
 import time
 from .safety import bounded_response, response_json, no_links
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from nacl.signing import VerifyKey
 import json
 from pathlib import Path
 import platform
@@ -29,7 +29,7 @@ def verify_manifest(raw):
     try:
         payload = base64.b64decode(envelope["payload"], validate=True)
         signature = base64.b64decode(envelope["signature"], validate=True)
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(public)).verify(signature, payload)
+        VerifyKey(bytes.fromhex(public)).verify(payload, signature)
         return json.loads(payload)
     except Exception as exc:
         raise ValueError("更新清单签名无效") from exc

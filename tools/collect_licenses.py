@@ -14,7 +14,7 @@ LEGAL = ROOT / "legal"
 COMPONENTS = {
     "PySide6-Essentials": ("6.11.2", "LGPL-3.0-only"),
     "shiboken6": ("6.11.2", "LGPL-3.0-only"),
-    "cryptography": ("50.0.1", "Apache-2.0 OR BSD-3-Clause"),
+    "PyNaCl": ("1.6.2", "Apache-2.0"),
     "cffi": ("2.1.1", "MIT-0"),
     "pycparser": ("3.0", "BSD-3-Clause"),
     "keyring": ("25.6.0", "MIT"),

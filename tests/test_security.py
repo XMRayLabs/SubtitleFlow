@@ -7,7 +7,7 @@ import tempfile
 import threading
 import unittest
 from unittest.mock import patch
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from nacl.signing import SigningKey
 from subtitleflow import updates
 from subtitleflow.safety import bounded_response, atomic_write, read_bytes, safe_tree
 from subtitleflow.jobs import Job, JobOptions
@@ -15,12 +15,12 @@ from subtitleflow.api import APIConfig
 
 class SecurityTests(unittest.TestCase):
     def test_manifest_signature(self):
-        key = Ed25519PrivateKey.generate()
+        key = SigningKey.generate()
         payload = b'{"version":"9.0.0"}'
         signed = {"key_id":"test", "payload":base64.b64encode(payload).decode(),
-                  "signature":base64.b64encode(key.sign(payload)).decode()}
+                  "signature":base64.b64encode(key.sign(payload).signature).decode()}
         with self.assertRaises(ValueError): updates.verify_manifest(json.dumps(signed))
-        with patch.dict(updates.TRUSTED_UPDATE_KEYS, {"test":key.public_key().public_bytes_raw().hex()}):
+        with patch.dict(updates.TRUSTED_UPDATE_KEYS, {"test":key.verify_key.encode().hex()}):
             self.assertEqual(updates.verify_manifest(json.dumps(signed))["version"],"9.0.0")
             signed["payload"] = base64.b64encode(b'{"version":"9.0.1"}').decode()
             with self.assertRaises(ValueError): updates.verify_manifest(json.dumps(signed))

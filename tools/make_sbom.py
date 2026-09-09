@@ -15,8 +15,6 @@ components += [{"type": "library", "name": "CPython", "version": platform.python
                {"type": "library", "name": "Python OpenSSL", "version": ssl.OPENSSL_VERSION}]
 from PySide6.QtCore import qVersion
 components.append({"type": "library", "name": "Qt", "version": qVersion()})
-from cryptography.hazmat.backends.openssl.backend import backend
-components.append({"type": "library", "name": "cryptography OpenSSL", "version": backend.openssl_version_text()})
 data = {"bomFormat": "CycloneDX", "specVersion": "1.5", "version": 1,
         "metadata": {"component": {"type": "application", "name": "SubtitleFlow"},
           "properties": [{"name": "subtitleflow:binary-inventory-sha256", "value": hashlib.sha256(inventory.read_bytes()).hexdigest()},

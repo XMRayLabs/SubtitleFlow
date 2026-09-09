@@ -2,7 +2,7 @@ import argparse
 import hashlib
 import base64
 import os
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from nacl.signing import SigningKey
 import json
 from pathlib import Path
 import re
@@ -52,14 +52,15 @@ if args.use_local_key:
 if not seed or not key_id:
     # Keep installer drafts usable, but never publish an unsigned update.json.
     args.output.unlink(missing_ok=True)
+    args.output.unlink(missing_ok=True)
     print("Signing key not configured; update.json intentionally omitted")
 else:
-    key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(seed))
+    key = SigningKey(bytes.fromhex(seed))
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from subtitleflow.update_trust import TRUSTED_UPDATE_KEYS
-    if TRUSTED_UPDATE_KEYS.get(key_id) != key.public_key().public_bytes_raw().hex():
+    if TRUSTED_UPDATE_KEYS.get(key_id) != key.verify_key.encode().hex():
         raise ValueError("Signing key does not match embedded public key")
     envelope = {"key_id": key_id, "payload": base64.b64encode(payload).decode(),
-                "signature": base64.b64encode(key.sign(payload)).decode()}
+                "signature": base64.b64encode(key.sign(payload).signature).decode()}
     args.output.write_text(json.dumps(envelope, indent=2), encoding="utf-8")

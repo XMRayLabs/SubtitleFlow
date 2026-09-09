@@ -1,6 +1,6 @@
 import hashlib
 import base64
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from nacl.signing import SigningKey
 import io
 import json
 from pathlib import Path
@@ -20,10 +20,10 @@ class UpdateFlowTests(unittest.TestCase):
         latest = {"tag_name": "v9.0.0", "assets": [{"name": "update.json", "browser_download_url":
                    f"https://github.com/{repo}/releases/download/v9.0.0/update.json"}]}
         manifest = {"version": "9.0.0", "platforms": {"windows-x86_64": {"url": url, "sha256": digest}}}
-        key = Ed25519PrivateKey.generate()
+        key = SigningKey.generate()
         raw = json.dumps(manifest).encode()
-        manifest = {"key_id": "test", "payload": base64.b64encode(raw).decode(), "signature": base64.b64encode(key.sign(raw)).decode()}
-        with patch.dict(updates.TRUSTED_UPDATE_KEYS, {"test": key.public_key().public_bytes_raw().hex()}), patch("subtitleflow.updates.platform_key", return_value="windows-x86_64"), patch("subtitleflow.updates.platform.system", return_value="Windows"), patch(
+        manifest = {"key_id": "test", "payload": base64.b64encode(raw).decode(), "signature": base64.b64encode(key.sign(raw).signature).decode()}
+        with patch.dict(updates.TRUSTED_UPDATE_KEYS, {"test": key.verify_key.encode().hex()}), patch("subtitleflow.updates.platform_key", return_value="windows-x86_64"), patch("subtitleflow.updates.platform.system", return_value="Windows"), patch(
                 "subtitleflow.updates.open_update", side_effect=[io.BytesIO(json.dumps(latest).encode()), io.BytesIO(json.dumps(manifest).encode())]):
             release = updates.check(repo, current="1.0.0")
         with tempfile.TemporaryDirectory() as tmp, patch("subtitleflow.updates.open_update", return_value=io.BytesIO(payload)):
