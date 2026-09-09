@@ -4,6 +4,7 @@
 - CPython：PSF 及其包含组件的许可，附实际解释器 LICENSE 和 Python 源码中的许可声明。
 - PySide6 Essentials / Shiboken6 6.11.2：选择 LGPL-3.0 路径。包含 Qt Core/Gui/Widgets 及必要平台动态依赖，按 LGPL_REPLACEMENT.md 交付源码与替换能力。
 - keyring 25.6.0、jaraco.classes/context/functools、more-itertools：MIT。
+- cryptography 50.0.1：Apache-2.0 或 BSD-3-Clause；cffi 2.1.1：MIT-0；pycparser 3.0：BSD-3-Clause。随 wheel 提供的原生组件许可证一并收集，仍需最终二进制审核。
 - Windows pywin32-ctypes：BSD-3-Clause。
 - Qt/Python 内嵌的第三方代码：逐项保留源码中的 COPYRIGHT、LICENSE、COPYING 及 SPDX 声明，实际构建审核后才可发布。
 
