@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 $stagingDirectory = $null
 $backupDirectory = $null
@@ -42,6 +42,25 @@ try {
     $shortcut.TargetPath = Join-Path $installDirectory 'SubtitleFlow.exe'
     $shortcut.WorkingDirectory = $installDirectory
     $shortcut.Save()
+    $uninstaller = Join-Path $installDirectory 'uninstall.ps1'
+    if (-not (Test-Path -LiteralPath $uninstaller)) { throw 'Uninstaller missing from package.' }
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\SubtitleFlow'
+    New-Item -Path $key -Force | Out-Null
+    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $properties = @{
+        DisplayName = 'SubtitleFlow'
+        DisplayVersion = (Get-Content -LiteralPath (Join-Path $installDirectory 'installed-version.txt') -Raw).Trim()
+        Publisher = 'XMRayLabs'
+        InstallLocation = $installDirectory
+        DisplayIcon = (Join-Path $installDirectory 'SubtitleFlow.exe')
+        UninstallString = ('"{0}" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{1}"' -f $powershell, $uninstaller)
+        URLInfoAbout = 'https://github.com/XMRayLabs/SubtitleFlow'
+    }
+    foreach ($name in $properties.Keys) {
+        New-ItemProperty -Path $key -Name $name -Value $properties[$name] -PropertyType String -Force | Out-Null
+    }
+    New-ItemProperty -Path $key -Name NoModify -Value 1 -PropertyType DWord -Force | Out-Null
+    New-ItemProperty -Path $key -Name NoRepair -Value 1 -PropertyType DWord -Force | Out-Null
     # Keep the preceding installation as a recoverable backup; never recursively delete it.
 } catch {
     [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'SubtitleFlow installation failed')

@@ -102,3 +102,7 @@ Windows 本机已在清空 Python/Conda/Qt 环境变量、PATH 仅保留系统�
 
 macOS 构建产物是独立 .app，DMG 安装流程为拖入 Applications，同样内含运行时。分别配置 Intel 和 Apple Silicon 构建，最低目标 macOS 13。
 Windows x64、Mac Apple Silicon 和 Mac Intel 已通过 GitHub Actions 构建、44 项单元测试、GUI 冒烟测试及清除开发环境后的独立应用启动验证。Mac 的实际交互安装、签名、公证以及最终依赖许可审核尚待完成；macOS 13 最低版本还需单独实测。
+
+## Windows 卸载
+
+从 0.1.1 安装包开始，在 Windows「设置 → 应用 → 已安装的应用」找到 SubtitleFlow 并卸载。先退出软件。卸载保留字幕输出、用户设置、已保存密钥及旧版本备份。若需清除密钥，先在翻译设置取消记住密钥并保存。旧版用户覆盖安装新版后即可使用系统卸载入口。

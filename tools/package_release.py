@@ -40,6 +40,8 @@ def package(audit, review_build=False):
             for path in bundle.rglob("*"):
                 if path.is_file():
                     archive.write(path, path.relative_to(bundle).as_posix())
+            archive.write(ROOT / "packaging/uninstall.ps1", "uninstall.ps1")
+            archive.writestr("installed-version.txt", __version__)
         shutil.copyfile(ROOT / "packaging/install.ps1", stage / "install.ps1")
         installer = out / (name + ".exe")
         sed = f"""[Version]
