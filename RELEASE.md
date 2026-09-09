@@ -45,14 +45,14 @@ main 推送自动构建三平台完整应用 ZIP 并上传 Actions artifacts；�
 草稿发布后才会被客户端 latest 检查发现；发布稳定版前必须上传正式安装包和 update.json，完成既有 release_gate 审核及平台签名。
 默认官方仓库为 XMRayLabs/SubtitleFlow，旧设置中空仓库会迁移到官方值。
 
-## 0.1.2 安全发布变更
+## 0.1.3 安全发布变更
 
 构建依赖使用 requirements-bootstrap.lock 和 requirements-build.lock，执行 --require-hashes --only-binary=:all:。CI 产物附 dependency-audit.json、sbom.json 与 binary-inventory.json。禁止跳过安全检查来发布稳定版本。
 
 更新签名默认在本机完成（私钥在系统凭据库）：
 
 ```shell
-python tools/make_update_manifest.py --use-local-key --repo XMRayLabs/SubtitleFlow --version 0.1.2 --assets release-assets --output release-assets/update.json
+python tools/make_update_manifest.py --use-local-key --repo XMRayLabs/SubtitleFlow --version 0.1.3 --assets release-assets --output release-assets/update.json
 ```
 
 release-assets 需包含实际安装包对应的 asset.json；发布前还应独立复核文件摘要与来源。自动草稿在没有签名密钥时不生成 update.json。签名清单与平台代码签名是不同要求，后者仍需配置证书。详见 SECURITY.md。
