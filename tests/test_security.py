@@ -72,3 +72,18 @@ class SecurityTests(unittest.TestCase):
             with self.assertRaises(ValueError):atomic_write(link,b'changed')
             with self.assertRaises(ValueError):safe_tree(root)
             self.assertEqual(outside.read_bytes(),b'keep')
+
+    @unittest.skipUnless(__import__('os').name == 'nt', 'Windows junction test')
+    def test_windows_junction_rejected(self):
+        import os
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();target=root/'outside';target.mkdir();link=root/'redirect'
+            result=subprocess.run(['cmd.exe','/c','mklink','/J',str(link),str(target)],capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(result.returncode,0)
+            try:
+                with self.assertRaises(ValueError):safe_tree(root)
+                with self.assertRaises(ValueError):atomic_write(link/'file',b'bad')
+                self.assertFalse((target/'file').exists())
+            finally:
+                os.rmdir(link)

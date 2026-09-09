@@ -51,6 +51,7 @@ if args.use_local_key:
         raise ValueError("Local signing key unavailable")
 if not seed or not key_id:
     # Keep installer drafts usable, but never publish an unsigned update.json.
+    args.output.unlink(missing_ok=True)
     print("Signing key not configured; update.json intentionally omitted")
 else:
     key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(seed))
