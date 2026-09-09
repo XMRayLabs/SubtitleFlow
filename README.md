@@ -10,7 +10,7 @@
 每次推送 main 自动构建 Windows x64、macOS Apple Silicon、macOS Intel。
 在 GitHub Actions 的 Desktop builds 页面下载对应系统 artifact，解压里面的应用 ZIP，打开程序即可，无需安装 Python 或依赖。
 推送 v开头版本标签会在三个平台验证成功后生成 GitHub Release 草稿。草稿仅供发布审核，不自动提供给用户更新。
-完成许可证审核、签名与安装测试后，上传安装包与 update.json 并发布稳定版，客户端启动检查和手动检查即可发现版本。
+安装包与 update.json 自动上传到发布草稿。完成许可证审核、签名与安装测试后发布稳定版，客户端启动检查和手动检查即可发现版本。
 
 官方更新仓库：XMRayLabs/SubtitleFlow。软件启动自动检查，用户确认后下载并校验 SHA-256，当前任务结束后启动安装。macOS 打开 DMG 后由用户拖入 Applications 完成替换，不承诺静默安装。
 
@@ -101,4 +101,4 @@ Windows 本机已在清空 Python/Conda/Qt 环境变量、PATH 仅保留系统�
 这不是全新虚拟机验收；实际操作系统最低版本仍需对应系统实测。
 
 macOS 构建产物是独立 .app，DMG 安装流程为拖入 Applications，同样内含运行时。分别配置 Intel 和 Apple Silicon 构建，最低目标 macOS 13。
-目前仅 Windows 实测完成；Mac 构建与安装签名、公证、最终依赖许可审核需要在对应发布环境完成。
+Windows x64、Mac Apple Silicon 和 Mac Intel 已通过 GitHub Actions 构建、44 项单元测试、GUI 冒烟测试及清除开发环境后的独立应用启动验证。Mac 的实际交互安装、签名、公证以及最终依赖许可审核尚待完成；macOS 13 最低版本还需单独实测。
