@@ -10,9 +10,3 @@ legal/licenses/
 legal/component-manifest.json
 legal/release-audit.json
 *.partial
-
-legal/sources/
-legal/licenses/
-legal/component-manifest.json
-legal/release-audit.json
-*.partial

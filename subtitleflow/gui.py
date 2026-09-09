@@ -459,6 +459,7 @@ class Window(QMainWindow):
             if not release:
                 if not silent:
                     self.status.setText("当前已是最新版本")
+                    self.update_status.setText("当前已是最新版本，或尚无已发布稳定版")
                 return
             if QMessageBox.question(self, "发现新版本", f"发现 {release.version}，是否下载并在任务结束后安装？") != QMessageBox.Yes:
                 return
@@ -483,6 +484,11 @@ class Window(QMainWindow):
         self.launch(lambda _: updates.check(repo), success, failed)
 
     def install_update(self):
+        if not self.pending_update:
+            return
+        if any(worker.isRunning() for worker in self.workers):
+            QTimer.singleShot(200, self.install_update)
+            return
         path = self.pending_update
         self.pending_update = None
         if QMessageBox.question(self, "安装更新", "安装包校验通过，现在关闭软件并打开安装包？") == QMessageBox.Yes:

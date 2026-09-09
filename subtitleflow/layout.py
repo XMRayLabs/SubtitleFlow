@@ -237,6 +237,8 @@ def build(window, table_type):
     update_layout.addWidget(w.repo)
     w.update_button = button("检查更新", lambda: w.check_update(False))
     update_layout.addWidget(w.update_button)
+    w.update_status = label("更新会在字幕任务完成后安装。")
+    update_layout.addWidget(w.update_status)
     w.mode.currentIndexChanged.connect(w.refresh_mode)
     w.export_xml.toggled.connect(w.refresh_mode)
     w.refresh_mode()
