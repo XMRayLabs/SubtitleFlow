@@ -104,6 +104,7 @@ class Window(QMainWindow):
         self.workers = []
         self.job_worker = None
         self.cancel = threading.Event()
+        self.update_cancel = threading.Event()
         self.pending_update = None
         self.update_busy = False
         from .layout import build
@@ -471,7 +472,8 @@ class Window(QMainWindow):
             if QMessageBox.question(self, "发现新版本", f"发现 {release.version}，是否下载并在任务结束后安装？") != QMessageBox.Yes:
                 return
             self.update_busy = True
-            self.launch(lambda _: updates.download(release, app_data() / "updates", self.cancel),
+            self.update_cancel.clear()
+            self.launch(lambda _: updates.download(release, app_data() / "updates", self.update_cancel),
                         downloaded, failed)
         def downloaded(path):
             self.update_busy = False
@@ -510,6 +512,7 @@ class Window(QMainWindow):
                 self.error("无法打开安装包，请从更新下载目录手动安装")
 
     def closeEvent(self, event):
+        self.update_cancel.set()
         if any(worker.isRunning() for worker in self.workers):
             self.cancel.set()
             self.status.setText("正在结束后台操作，请稍候再关闭窗口")

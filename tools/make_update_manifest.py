@@ -52,7 +52,6 @@ if args.use_local_key:
 if not seed or not key_id:
     # Keep installer drafts usable, but never publish an unsigned update.json.
     args.output.unlink(missing_ok=True)
-    args.output.unlink(missing_ok=True)
     print("Signing key not configured; update.json intentionally omitted")
 else:
     key = SigningKey(bytes.fromhex(seed))
