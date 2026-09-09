@@ -1,0 +1,77 @@
+name: Desktop builds
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: macos-15
+            platform: macos-arm64
+          - os: macos-15-intel
+            platform: macos-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14.6'
+      - run: python -m pip install -r requirements-build.txt
+      - run: python -m pip install --no-deps --no-build-isolation -e .
+      - run: python -m unittest discover -s tests -v
+      - run: python -c "from pathlib import Path; Path('build').mkdir(exist_ok=True)"
+      - run: python -m tests.smoke_gui
+      - run: python tools/collect_licenses.py --fetch-sources
+      - run: python -m PyInstaller --noconfirm SubtitleFlow.spec
+      - name: Verify Windows independent app
+        if: runner.os == 'Windows'
+        run: python tools/verify_standalone.py dist/SubtitleFlow/SubtitleFlow.exe
+      - name: Verify macOS independent app
+        if: runner.os == 'macOS'
+        run: python tools/verify_standalone.py dist/SubtitleFlow.app/Contents/MacOS/SubtitleFlow
+      - name: Inventory Windows
+        if: runner.os == 'Windows'
+        run: python tools/release_gate.py dist/SubtitleFlow --inventory-only
+      - name: Inventory macOS
+        if: runner.os == 'macOS'
+        run: python tools/release_gate.py dist/SubtitleFlow.app --inventory-only
+      - run: python tools/archive_build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SubtitleFlow-${{ matrix.platform }}
+          path: |
+            dist/artifacts/
+            build/binary-inventory.json
+            build/standalone-validation.json
+            build/gui-preview.png
+            legal/component-manifest.json
+          if-no-files-found: error
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: desktop
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create draft with tested platform builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          gh release create "$RELEASE_TAG" --draft --verify-tag --title "SubtitleFlow $RELEASE_TAG" --notes "Windows and macOS builds passed automated tests. Complete platform signing and license review before publishing installers and update.json."
+          find artifacts -name '*.zip' -exec gh release upload "$RELEASE_TAG" {} \;

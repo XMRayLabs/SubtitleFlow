@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subtitleflow"
+version = "0.1.0"
+description = "跨平台字幕合并与翻译工具"
+requires-python = ">=3.12"
+dependencies = ["PySide6-Essentials==6.11.2", "keyring==25.6.0"]
+
+[project.scripts]
+subtitleflow = "subtitleflow.gui:main"
+
+[tool.setuptools.packages.find]
+include = ["subtitleflow*"]

@@ -1,0 +1,19 @@
+SubtitleFlow Proprietary License
+Copyright (c) 2026 XMRayLabs. All rights reserved.
+
+This repository and the SubtitleFlow application are proprietary, not open source.
+Public availability of source code does not grant permission to modify, redistribute,
+sublicense, resell, or create derivative works of the proprietary portions.
+
+The end-user license in legal/EULA.md governs use of the application. Copies strictly
+necessary to install, run and back up an authorized copy are permitted. All other
+copying, distribution, resale and modification require prior written permission
+from XMRayLabs, except as required by applicable law or a third-party license.
+
+Third-party components remain governed by their own licenses. This license does
+not restrict rights to copy, modify, replace, relink, redistribute, or reverse
+engineer for debugging modifications that are granted by applicable LGPL or other
+third-party licenses. See legal/THIRD_PARTY_NOTICES.md and legal/LGPL_REPLACEMENT.md.
+
+This license places no additional restrictions on commercial use of user subtitle
+outputs and claims no ownership of user input or output. See legal/OUTPUT_RIGHTS.md.
