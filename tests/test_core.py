@@ -71,8 +71,8 @@ class MergeTests(unittest.TestCase):
 
     def test_complete_long_sentence(self):
         result = merge([cue(0, 6, "This"), cue(6, 12, "is a long"), cue(12, 18, "sentence.")], MergeOptions())
-        self.assertEqual(result[0].end, 18000)
-        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].end, 12000)
+        self.assertEqual(len(result), 2)
 
     def test_silence_threshold(self):
         for gap, count in ((2.999, 1), (3, 2), (4, 2)):
@@ -95,7 +95,7 @@ class MergeTests(unittest.TestCase):
     def test_ai_boundary_and_silence(self):
         values = [cue(0, 10, "a"), cue(10, 18, "b"), cue(21, 23, "c")]
         result = merge(values, MergeOptions(), {1})
-        self.assertEqual([c.end for c in result], [18000, 23000])
+        self.assertEqual([c.end for c in result], [10000, 18000, 23000])
 
 
 class TranslationTests(unittest.TestCase):

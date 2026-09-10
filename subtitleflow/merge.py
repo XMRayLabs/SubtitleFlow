@@ -78,14 +78,15 @@ def merge(cues: list[Cue], options: MergeOptions, boundaries: set[int] | None = 
                 duration = group_end - cues[cursor].start
                 if duration >= target and end in ends:
                     break
+                next_end = max(group_end, cues[end + 1].end)
+                # Sentence preference cannot bypass the duration budget.
+                # An existing long cue is retained intact, never extended further.
+                if next_end - cues[cursor].start > limit:
+                    break
                 future_sentence = any(j in ends for j in range(end + 1, segment_end + 1))
-                if not future_sentence:
-                    next_end = max(group_end, cues[end + 1].end)
-                    gap = cues[end + 1].start - group_end
-                    if duration >= target and gap > 0:
-                        break
-                    if next_end - cues[cursor].start > limit:
-                        break
+                gap = cues[end + 1].start - group_end
+                if not future_sentence and duration >= target and gap > 0:
+                    break
                 end += 1
                 group_end = max(group_end, cues[end].end)
             group = cues[cursor:end + 1]
