@@ -32,4 +32,4 @@ coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='SubtitleF
 if sys.platform == 'darwin':
     app = BUNDLE(coll, name='SubtitleFlow.app', icon='assets/app.icns',
                  bundle_identifier='app.subtitleflow.desktop',
-                 info_plist={'NSHighResolutionCapable': True, 'CFBundleShortVersionString': '0.1.5', 'LSMinimumSystemVersion': '13.0'})
+                 info_plist={'NSHighResolutionCapable': True, 'CFBundleShortVersionString': '0.1.6', 'LSMinimumSystemVersion': '13.0'})
