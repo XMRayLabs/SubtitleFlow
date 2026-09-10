@@ -51,6 +51,24 @@ class SubtitleText(HTMLParser):
                 self.runs.append((value, style))
 
 
+def wrap_text_runs(runs, columns=30):
+    """Insert visual line breaks across style spans without splitting a title."""
+    column = 0
+    for value, style in runs:
+        output = []
+        for char in value.replace("\r\n", "\n").replace("\r", "\n"):
+            if char == "\n":
+                output.append(char)
+                column = 0
+                continue
+            if column >= columns:
+                output.append("\n")
+                column = 0
+            output.append(char)
+            column += 1
+        yield "".join(output), style
+
+
 def rational(value):
     value = Fraction(value)
     return f"{value.numerator}s" if value.denominator == 1 else f"{value.numerator}/{value.denominator}s"
@@ -96,7 +114,7 @@ def render(cues, name, options=ExportOptions()):
         parser.close()
         text = ET.SubElement(title, "text")
         styles = {}
-        for value, style in parser.runs:
+        for value, style in wrap_text_runs(parser.runs):
             if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", value):
                 raise ValueError(f"第 {index} 条字幕包含 XML 不允许的控制字符")
             if style not in styles:

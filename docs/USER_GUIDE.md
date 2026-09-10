@@ -40,3 +40,5 @@ Open WebUI 的 API Key 需在该服务中创建/取得；401 表示尚未提供�
 
 格式参考：https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/LegacyDTDsFinalCutPro/FCPXMLDTDv1.7/FCPXMLDTDv1.7.html
 
+
+FCPXML 导出会每 30 个可见字符自动换行（汉字、标点、字母及空格均计入，样式标签不计入），保留原有换行及加粗/斜体。长字幕仍是一个标题，时间轴不变，不修改 SRT。超过 60 字可继续换为三行或更多行。

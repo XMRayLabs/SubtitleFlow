@@ -43,6 +43,30 @@ class FCPXMLTests(unittest.TestCase):
         self.assertTrue(any(s.get("italic") == "1" for s in title.findall("text-style-def/text-style")))
         self.assertIsNone(root.find(".//asset"))
 
+    def test_wrap_30_characters_keeps_one_title_and_srt(self):
+        for length in (29, 30, 31, 60, 61):
+            with self.subTest(length=length):
+                cue = Cue(7, 1000, 5000, "<b>" + "字" * length + "</b>")
+                before = srt_render([cue])
+                root = ET.fromstring(render([cue], "test"))
+                titles = root.findall(".//title")
+                self.assertEqual(len(titles), 1)
+                text = "".join(titles[0].find("text").itertext())
+                self.assertEqual(text, "\n".join("字" * min(30, length-i) for i in range(0,length,30)))
+                self.assertEqual(time_value(titles[0].get("offset")), 1)
+                self.assertEqual(time_value(titles[0].get("duration")), 4)
+                self.assertEqual(srt_render([cue]), before)
+
+    def test_wrap_across_styles_and_preserve_existing_newline(self):
+        cue = Cue(1, 0, 1000, "<b>" + "甲"*29 + "</b><i>乙丙</i><br>丁")
+        root = ET.fromstring(render([cue], "test"))
+        title = root.find(".//title")
+        self.assertEqual("".join(title.find("text").itertext()), "甲"*29 + "乙\n丙\n丁")
+        spans = title.find("text").findall("text-style")
+        self.assertEqual(spans[1].text, "乙\n丙")
+        styles = {d.get("id"):d.find("text-style") for d in title.findall("text-style-def")}
+        self.assertEqual(styles[spans[1].get("ref")].get("italic"), "1")
+
     def test_frame_alignment_and_overlaps(self):
         for fps in FPS:
             root = ET.fromstring(render([Cue(1, 1001, 2002, "a"), Cue(2, 1500, 1501, "b")], "test", ExportOptions(fps)))
