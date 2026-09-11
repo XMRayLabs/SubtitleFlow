@@ -4,8 +4,11 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox, QCheckBox, QDialog, QMenu, QProgressBar,
+    QStackedWidget, QButtonGroup,
 )
 from .design import apply, logo
+
+PAGES = (("subtitle", "字幕处理"), ("transcribe", "音频转录"))
 
 
 def row(*widgets):
@@ -44,11 +47,35 @@ def build(window, table_type):
     w = window
     apply()
     w.setWindowIcon(QIcon(logo()))
-    w.resize(960, 760)
-    w.setMinimumSize(820, 670)
+    w.resize(1080, 760)
+    w.setMinimumSize(940, 670)
     root = QWidget()
     w.setCentralWidget(root)
-    outer = QVBoxLayout(root)
+    shell = QHBoxLayout(root)
+    shell.setContentsMargins(0, 0, 0, 0)
+    shell.setSpacing(0)
+    nav = QFrame()
+    nav.setObjectName("nav")
+    nav.setFixedWidth(128)
+    nav_layout = QVBoxLayout(nav)
+    nav_layout.setContentsMargins(12, 22, 12, 20)
+    nav_layout.setSpacing(6)
+    w.nav_group = QButtonGroup(w)
+    w.nav_group.setExclusive(True)
+    w.nav_buttons = {}
+    for key, text in PAGES:
+        item = QPushButton(text)
+        item.setObjectName("nav")
+        item.setCheckable(True)
+        item.clicked.connect(lambda checked=False, key=key: w.show_page(key))
+        w.nav_group.addButton(item)
+        w.nav_buttons[key] = item
+        nav_layout.addWidget(item)
+    nav_layout.addStretch()
+    shell.addWidget(nav)
+    content = QWidget()
+    shell.addWidget(content, 1)
+    outer = QVBoxLayout(content)
     outer.setContentsMargins(28, 22, 28, 20)
     outer.setSpacing(17)
     header = QHBoxLayout()
@@ -74,6 +101,20 @@ def build(window, table_type):
     header.addWidget(more)
     outer.addLayout(header)
 
+    w.pages = QStackedWidget()
+    outer.addWidget(w.pages, 1)
+    w.subtitle_page = QWidget()
+    w.pages.addWidget(w.subtitle_page)
+    w.transcribe_page = QWidget()
+    w.pages.addWidget(w.transcribe_page)
+    placeholder = QVBoxLayout(w.transcribe_page)
+    placeholder.setContentsMargins(0, 0, 0, 0)
+    placeholder.addWidget(label("音频转录", "section"))
+    placeholder.addStretch()
+    page = QVBoxLayout(w.subtitle_page)
+    page.setContentsMargins(0, 0, 0, 0)
+    page.setSpacing(17)
+
     files = QFrame()
     files.setObjectName("card")
     file_layout = QVBoxLayout(files)
@@ -97,7 +138,7 @@ def build(window, table_type):
     w.table.setAlternatingRowColors(True)
     w.table.setMinimumHeight(170)
     file_layout.addWidget(w.table, 1)
-    outer.addWidget(files, 1)
+    page.addWidget(files, 1)
 
     w.settings_group = QFrame()
     w.settings_group.setObjectName("card")
@@ -149,11 +190,11 @@ def build(window, table_type):
     w.output.setText(str(Path.home() / "SubtitleFlow输出"))
     w.output.setPlaceholderText("选择结果保存位置")
     settings.addLayout(row(label("保存到"), w.output, button("选择", w.choose_output)))
-    outer.addWidget(w.settings_group)
+    page.addWidget(w.settings_group)
     w.progress = QProgressBar()
     w.progress.setTextVisible(False)
     w.progress.setValue(0)
-    outer.addWidget(w.progress)
+    page.addWidget(w.progress)
     footer = QHBoxLayout()
     w.status = label("拖入字幕，即可开始")
     w.status.setWordWrap(True)
@@ -169,7 +210,7 @@ def build(window, table_type):
     w.start_button = button("开始处理", lambda: w.start(), "primary")
     for item in (w.open_button, w.retry_button, w.cancel_button, w.start_button):
         footer.addWidget(item)
-    outer.addLayout(footer)
+    page.addLayout(footer)
 
     w.api_dialog = QDialog(w)
     w.api_dialog.setWindowTitle("翻译设置")
@@ -242,3 +283,4 @@ def build(window, table_type):
     w.mode.currentIndexChanged.connect(w.refresh_mode)
     w.export_xml.toggled.connect(w.refresh_mode)
     w.refresh_mode()
+    w.show_page(PAGES[0][0])

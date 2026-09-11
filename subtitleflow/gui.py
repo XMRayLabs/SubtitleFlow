@@ -99,7 +99,6 @@ class FileTable(QTableWidget):
 class Window(QMainWindow):
     def __init__(self, load_preferences=True):
         super().__init__()
-        self.setWindowTitle(f"SubtitleFlow · 字幕合并与翻译 {__version__}")
         self.paths, self.last_root = [], None
         self.workers = []
         self.job_worker = None
@@ -114,6 +113,20 @@ class Window(QMainWindow):
         QTimer.singleShot(1500, lambda: self.check_update(True))
         if load_preferences:
             self.schedule_models()
+
+    def show_page(self, key):
+        from .layout import PAGES
+        names = dict(PAGES)
+        if key not in names:
+            key = PAGES[0][0]
+        self.page = key
+        self.pages.setCurrentWidget(self.subtitle_page if key == "subtitle" else self.transcribe_page)
+        self.nav_buttons[key].setChecked(True)
+        # Translation settings and task restore only concern subtitle processing.
+        subtitle = key == "subtitle"
+        self.translation_button.setVisible(subtitle)
+        self.restore_button.setVisible(subtitle)
+        self.setWindowTitle(f"SubtitleFlow · {names[key]} {__version__}")
 
     def show_translation(self):
         if not self.busy():
@@ -212,7 +225,7 @@ class Window(QMainWindow):
     def save_settings(self):
         data = {"base": self.base.text(), "model": self.model.currentText(), "output": self.output.text(),
                 "repo": self.repo.text().strip(), "remember": self.remember.isChecked(),
-                "local_cert": self.local_cert.isChecked(),
+                "local_cert": self.local_cert.isChecked(), "page": self.page,
                 "options": asdict(self.options())}
         if self.remember.isChecked():
             native_keyring().set_password("SubtitleFlow", "api-key", self.key.text())
@@ -239,6 +252,7 @@ class Window(QMainWindow):
             self.local_cert.setChecked(data.get("local_cert", False))
             self.remember.setChecked(data.get("remember", False))
             self.apply_options(data.get("options", {}))
+            self.show_page(data.get("page"))
             if self.remember.isChecked():
                 self.key.setText(native_keyring().get_password("SubtitleFlow", "api-key") or "")
         except FileNotFoundError:

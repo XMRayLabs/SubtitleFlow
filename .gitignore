@@ -10,3 +10,10 @@ legal/licenses/
 legal/component-manifest.json
 legal/release-audit.json
 *.partial
+
+# Local planning notes (glossary, ADRs, agent config, tickets) stay out of git
+.scratch/
+AGENTS.md
+CONTEXT.md
+docs/adr/
+docs/agents/
