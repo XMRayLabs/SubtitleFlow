@@ -112,6 +112,21 @@ class TranscribePageTests(WindowTestCase):
         self.assertTrue((Path(self.data.name) / "talk.srt").exists())
         self.assertEqual(self.page.progress.value(), 1000)
 
+    def test_retry_only_reruns_unfinished_files(self):
+        bad = Path(self.data.name) / "bad.wav"
+        bad.write_text(json.dumps({"duration": 60, "fail": "显存不足"}), encoding="utf-8")
+        good = Path(self.data.name) / "good.wav"
+        good.write_text(json.dumps({"duration": 60}), encoding="utf-8")
+        self.page.add_files([str(bad), str(good)])
+        self.page.start_button.click()
+        self.wait_idle()
+        self.assertTrue(self.page.retry_button.isEnabled())
+        self.page.retry_button.click()
+        self.wait_idle()
+        self.assertEqual(self.page.table.item(0, 1).text(), "失败")
+        self.assertEqual(self.page.table.item(1, 1).text(), "已完成")
+        self.assertFalse((Path(self.data.name) / "good (1).srt").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

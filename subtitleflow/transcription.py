@@ -170,8 +170,34 @@ def describe(status) -> str:
     return status.get("error", "")
 
 
-def output_path(source: Path) -> Path:
-    return source.with_suffix(".srt")
+def default_fallback_dirs() -> list[Path]:
+    """源文件目录写不进去时依次尝试的保存位置。不用程序安装目录：Program Files 对普通用户不可写。"""
+    local = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".local" / "share")
+    return [Path.home() / "SubtitleFlow输出" / "转录", Path(local) / "SubtitleFlow" / "转录输出"]
+
+
+def free_name(directory: Path, stem: str) -> Path:
+    """同名 SRT 已存在时依次改名为 `名称 (1).srt`、`名称 (2).srt`……，从不覆盖已有文件。"""
+    target, count = directory / f"{stem}.srt", 0
+    while target.exists():
+        count += 1
+        target = directory / f"{stem} ({count}).srt"
+    return target
+
+
+def save_srt(source: Path, cues, fallback_dirs) -> Path:
+    """保存到源文件旁；写不进去时依次改存到 fallback_dirs。返回实际保存路径。"""
+    error = None
+    for index, directory in enumerate([source.parent, *fallback_dirs]):
+        try:
+            if index:
+                directory.mkdir(parents=True, exist_ok=True)
+            target = free_name(directory, source.stem)
+            srt.write(target, cues)
+            return target
+        except (OSError, ValueError) as exc:
+            error = exc
+    raise OSError(f"无法保存 SRT：{error}")
 
 
 class TranscribeJob:
@@ -181,10 +207,11 @@ class TranscribeJob:
     """
 
     def __init__(self, paths, segment_seconds, service: ServiceManager, cancel: threading.Event,
-                 event=lambda *args: None, poll_interval=0.3):
+                 event=lambda *args: None, poll_interval=0.3, fallback_dirs=None):
         self.paths = [Path(p) for p in paths]
         self.segment_seconds, self.service, self.cancel = segment_seconds, service, cancel
         self.event, self.poll_interval = event, poll_interval
+        self.fallback_dirs = default_fallback_dirs() if fallback_dirs is None else fallback_dirs
 
     def run(self):
         results = []
@@ -221,8 +248,7 @@ class TranscribeJob:
             if status["status"] == "cancelled":
                 self.event("file", index, "已取消", "")
                 return "cancelled"
-            target = output_path(path)
-            srt.write(target, client.result(job_id))
+            target = save_srt(path, client.result(job_id), self.fallback_dirs)
             self.event("progress", index, 1.0)
             self.event("file", index, "已完成", str(target))
             return "done"

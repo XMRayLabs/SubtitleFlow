@@ -2,7 +2,8 @@
 from pathlib import Path
 import threading
 
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QSpinBox, QProgressBar, QFileDialog, QTableWidgetItem
 
 from .transcription import TranscribeJob, is_media, MEDIA_SUFFIXES
@@ -10,6 +11,7 @@ from .widgets import FileTable, Worker
 
 DEFAULT_SEGMENT_MINUTES = 5
 STATUS_COLORS = {"已完成": "#16856b", "失败": "#d14d61", "转录中": "#5264e8", "处理中": "#5264e8"}
+RETRYABLE = ("失败", "已取消", "未处理")
 
 
 class TranscribePage(QWidget):
@@ -21,6 +23,8 @@ class TranscribePage(QWidget):
         self.worker = None
         self.cancel = threading.Event()
         self.fractions = {}
+        self.rows: list[int] = []            # 本次任务处理的行（重试时只是其中一部分）
+        self.outputs: dict[int, Path] = {}   # 行 → 实际保存的 SRT 路径
 
         page = QVBoxLayout(self)
         page.setContentsMargins(0, 0, 0, 0)
@@ -75,11 +79,15 @@ class TranscribePage(QWidget):
         self.status = label("拖入音频或视频，即可开始")
         self.status.setWordWrap(True)
         footer.addWidget(self.status, 1)
+        self.open_button = button("查看结果", self.open_output, "quiet")
+        self.open_button.hide()
+        self.retry_button = button("重试", self.retry, "quiet")
+        self.retry_button.hide()
         self.cancel_button = button("取消", self.cancel_job)
         self.cancel_button.hide()
-        self.start_button = button("开始转录", self.start, "primary")
-        footer.addWidget(self.cancel_button)
-        footer.addWidget(self.start_button)
+        self.start_button = button("开始转录", lambda: self.start(), "primary")
+        for item in (self.open_button, self.retry_button, self.cancel_button, self.start_button):
+            footer.addWidget(item)
         page.addLayout(footer)
 
     # ---- 设置 ----------------------------------------------------------
@@ -119,6 +127,8 @@ class TranscribePage(QWidget):
         if self.busy():
             return
         self.paths.clear()
+        self.outputs.clear()
+        self.update_result_buttons()
         self.table.setRowCount(0)
         self.file_count.setText("0 个文件")
         self.status.setText("拖入音频或视频，即可开始")
@@ -127,7 +137,15 @@ class TranscribePage(QWidget):
 
     # ---- 转录 ----------------------------------------------------------
 
-    def start(self):
+    def unfinished_rows(self):
+        return [i for i in range(self.table.rowCount()) if self.table.item(i, 1).text() in RETRYABLE]
+
+    def retry(self):
+        rows = self.unfinished_rows()
+        if rows:
+            self.start(rows)
+
+    def start(self, rows=None):
         if self.busy():
             return
         if not self.paths:
@@ -138,13 +156,16 @@ class TranscribePage(QWidget):
             self.window.error("尚未安装转录服务")
             return
         self.window.save_preferences()
+        self.rows = list(range(len(self.paths))) if rows is None else rows
         self.cancel = threading.Event()
         self.fractions = {}
         self.progress.setValue(0)
-        for index in range(len(self.paths)):
-            self.set_row(index, "等待", "")
+        for row_index in self.rows:
+            self.outputs.pop(row_index, None)
+            self.set_row(row_index, "等待", "")
         self.set_running(True)
-        paths, minutes, cancel = list(self.paths), self.segment_minutes.value(), self.cancel
+        paths = [self.paths[i] for i in self.rows]
+        minutes, cancel = self.segment_minutes.value(), self.cancel
         self.worker = Worker(lambda event: TranscribeJob(paths, minutes * 60, service, cancel, event).run())
         self.window.workers.append(self.worker)
         self.worker.event.connect(self.job_event)
@@ -160,17 +181,33 @@ class TranscribePage(QWidget):
     def job_event(self, args):
         kind, *values = args
         if kind == "file":
-            self.set_row(*values)
-            if values[1] in ("失败", "已取消", "未处理"):
-                self.fractions[values[0]] = 1.0
+            row_index, status, detail = self.rows[values[0]], values[1], values[2]
+            self.set_row(row_index, status, detail)
+            if status == "已完成":
+                self.outputs[row_index] = Path(detail)
+            if status in RETRYABLE:
+                self.fractions[row_index] = 1.0
         elif kind == "progress":
-            self.fractions[values[0]] = values[1]
+            self.fractions[self.rows[values[0]]] = values[1]
         elif kind == "complete":
-            self.status.setText({"done": "全部转录完成，SRT 已保存在源文件旁边",
-                                 "partial": "部分文件转录失败，其余已完成",
+            self.status.setText({"done": "全部转录完成，SRT 保存位置见「进度 / 说明」",
+                                 "partial": "部分文件转录失败，可以重试未完成的文件",
                                  "cancelled": "转录已取消，已完成的 SRT 已保留"}[values[0]])
-        if self.paths:
-            self.progress.setValue(round(1000 * sum(self.fractions.values()) / len(self.paths)))
+        if self.rows:
+            self.progress.setValue(round(1000 * sum(self.fractions.values()) / len(self.rows)))
+
+    def update_result_buttons(self):
+        idle = not self.busy()
+        self.open_button.setVisible(idle and bool(self.outputs))
+        can_retry = idle and bool(self.unfinished_rows())
+        self.retry_button.setVisible(can_retry)
+        self.retry_button.setEnabled(can_retry)
+
+    def open_output(self):
+        selected = [i.row() for i in self.table.selectionModel().selectedRows() if i.row() in self.outputs]
+        target = self.outputs[selected[0]] if selected else self.outputs[max(self.outputs)] if self.outputs else None
+        if target and target.parent.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.parent)))
 
     def job_finished(self):
         # finished 信号发出时线程可能还没完全退出；先等它结束，再释放 QThread 对象
@@ -194,3 +231,7 @@ class TranscribePage(QWidget):
         self.start_button.setText("转录中…" if active else "开始转录")
         if active:
             self.status.setText("正在转录…")
+            self.open_button.hide()
+            self.retry_button.hide()
+        else:
+            self.update_result_buttons()

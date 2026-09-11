@@ -7,7 +7,7 @@ import time
 import unittest
 
 from subtitleflow import srt
-from subtitleflow.transcription import ServiceManager, TranscribeJob
+from subtitleflow.transcription import ServiceManager, TranscribeJob, save_srt
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -71,6 +71,31 @@ class TranscribeJobTests(unittest.TestCase):
         self.assertFalse((self.dir / "later.srt").exists())
         self.assertIn(("file", 0, "已取消", ""), events)
         self.assertIn(("file", 1, "未处理", ""), events)
+
+
+class SaveSrtTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        self.cues = [srt.Cue(1, 0, 1000, "你好")]
+
+    def test_never_overwrites_existing_srt(self):
+        source = self.dir / "采访.mp4"
+        (self.dir / "采访.srt").write_text("用户校对过的字幕", encoding="utf-8")
+        first = save_srt(source, self.cues, [])
+        second = save_srt(source, self.cues, [])
+        self.assertEqual((first.name, second.name), ("采访 (1).srt", "采访 (2).srt"))
+        self.assertEqual((self.dir / "采访.srt").read_text(encoding="utf-8"), "用户校对过的字幕")
+        self.assertEqual(srt.read(first)[0].text, "你好")
+
+    def test_falls_back_in_order_when_directory_is_not_writable(self):
+        unwritable = self.dir / "missing" / "talk.wav"   # 目录不存在，写入会失败
+        also_bad = self.dir / "file-not-dir"
+        also_bad.write_text("", encoding="utf-8")
+        fallback = self.dir / "fallback"
+        saved = save_srt(unwritable, self.cues, [also_bad / "sub", fallback])
+        self.assertEqual(saved, fallback / "talk.srt")
 
 
 if __name__ == "__main__":
