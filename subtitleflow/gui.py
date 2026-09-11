@@ -4,13 +4,10 @@ from pathlib import Path
 import sys
 import threading
 
-from PySide6.QtCore import QThread, Signal, QStandardPaths, QTimer, QUrl
+from PySide6.QtCore import QStandardPaths, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QPushButton, QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox,
-    QCheckBox, QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
-    QMessageBox, QProgressBar, QGroupBox, QAbstractItemView,
+    QApplication, QMainWindow, QVBoxLayout, QFileDialog, QTableWidgetItem, QMessageBox,
 )
 from . import __version__
 from .api import APIConfig, Client
@@ -18,6 +15,7 @@ from .jobs import Job, JobOptions
 from .merge import MergeOptions
 from . import updates
 from .safety import safe_tree, read_json
+from .widgets import FileTable, Worker
 
 
 def app_data():
@@ -36,66 +34,6 @@ def native_keyring():
     raise RuntimeError("记住密钥仅支持 Windows 和 macOS 系统凭据存储")
 
 
-class Worker(QThread):
-    event = Signal(object)
-    succeeded = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, action, secret=""):
-        super().__init__()
-        self.action, self.secret = action, secret
-
-    def run(self):
-        try:
-            self.succeeded.emit(self.action(lambda *args: self.event.emit(args)))
-        except Exception as exc:
-            message = str(exc)
-            self.failed.emit(message.replace(self.secret, "[REDACTED]") if self.secret else message)
-
-
-class FileTable(QTableWidget):
-    files_dropped = Signal(list)
-
-    def __init__(self):
-        super().__init__(0, 3)
-        self.setHorizontalHeaderLabels(["SRT 文件", "状态", "进度 / 说明"])
-        self.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setAcceptDrops(True)
-        self.setDragDropMode(QAbstractItemView.DropOnly)
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if self.rowCount() == 0:
-            from PySide6.QtGui import QPainter, QColor, QFont
-            from PySide6.QtCore import Qt
-            painter = QPainter(self.viewport())
-            painter.setPen(QColor("#718099"))
-            font = painter.font()
-            font.setPointSize(13)
-            painter.setFont(font)
-            painter.drawText(self.viewport().rect().adjusted(0, -14, 0, -14), Qt.AlignCenter, "将 SRT 字幕拖到这里")
-            font.setPointSize(10)
-            painter.setFont(font)
-            painter.setPen(QColor("#a0aabc"))
-            painter.drawText(self.viewport().rect().adjusted(0, 43, 0, 43), Qt.AlignCenter, "支持多个文件，也可以点击右上方添加")
-            painter.end()
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def dropEvent(self, event):
-        self.files_dropped.emit([url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()])
-        event.acceptProposedAction()
-
-
 class Window(QMainWindow):
     def __init__(self, load_preferences=True):
         super().__init__()
@@ -106,6 +44,9 @@ class Window(QMainWindow):
         self.update_cancel = threading.Event()
         self.pending_update = None
         self.update_busy = False
+        from .transcription import ServiceManager, development_command
+        command = development_command()
+        self.transcription_service = ServiceManager(*command) if command else None
         from .layout import build
         build(self, FileTable)
         if load_preferences:
@@ -144,6 +85,20 @@ class Window(QMainWindow):
     def show_update(self):
         if not self.busy():
             self.update_dialog.open()
+
+    def any_busy(self):
+        return self.busy() or self.transcribe_page.busy()
+
+    def save_preferences(self):
+        try:
+            self.save_settings()
+        except Exception as exc:
+            self.status.setText(f"设置未能保存：{exc}")
+
+    def worker_finished(self):
+        """任一页的任务结束后调用；所有任务都结束才安装已下载的更新。"""
+        if self.pending_update and not self.any_busy():
+            self.install_update()
 
     def refresh_mode(self):
         mode = self.mode.currentData()
@@ -226,6 +181,7 @@ class Window(QMainWindow):
         data = {"base": self.base.text(), "model": self.model.currentText(), "output": self.output.text(),
                 "repo": self.repo.text().strip(), "remember": self.remember.isChecked(),
                 "local_cert": self.local_cert.isChecked(), "page": self.page,
+                "transcribe": self.transcribe_page.settings(),
                 "options": asdict(self.options())}
         if self.remember.isChecked():
             native_keyring().set_password("SubtitleFlow", "api-key", self.key.text())
@@ -252,6 +208,7 @@ class Window(QMainWindow):
             self.local_cert.setChecked(data.get("local_cert", False))
             self.remember.setChecked(data.get("remember", False))
             self.apply_options(data.get("options", {}))
+            self.transcribe_page.apply_settings(data.get("transcribe", {}))
             self.show_page(data.get("page"))
             if self.remember.isChecked():
                 self.key.setText(native_keyring().get_password("SubtitleFlow", "api-key") or "")
@@ -331,8 +288,7 @@ class Window(QMainWindow):
         self.workers.remove(self.job_worker)
         self.job_worker = None
         self.set_running(False)
-        if self.pending_update:
-            self.install_update()
+        self.worker_finished()
 
     def cancel_job(self):
         self.cancel.set()
@@ -492,8 +448,8 @@ class Window(QMainWindow):
         def downloaded(path):
             self.update_busy = False
             self.pending_update = path
-            if self.busy():
-                self.status.setText("更新已下载并通过校验，将在字幕任务结束后提示安装")
+            if self.any_busy():
+                self.status.setText("更新已下载并通过校验，将在当前任务结束后提示安装")
             else:
                 self.install_update()
         def failed(message):
@@ -529,7 +485,9 @@ class Window(QMainWindow):
         self.update_cancel.set()
         if any(worker.isRunning() for worker in self.workers):
             self.cancel.set()
+            self.transcribe_page.cancel.set()
             self.status.setText("正在结束后台操作，请稍候再关闭窗口")
+            self.transcribe_page.status.setText("正在结束转录，请稍候再关闭窗口")
             event.ignore()
             return
         try:
@@ -538,6 +496,8 @@ class Window(QMainWindow):
             self.error(str(exc))
             event.ignore()
             return
+        if self.transcription_service:
+            self.transcription_service.stop()
         event.accept()
 
 

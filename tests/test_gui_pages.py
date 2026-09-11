@@ -2,13 +2,16 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json
 from pathlib import Path
+import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 
 from subtitleflow import gui
+from subtitleflow.transcription import ServiceManager
 
 app = QApplication.instance() or QApplication([])
 
@@ -24,15 +27,20 @@ class NoKeyring:
         pass
 
 
-class PageNavigationTests(unittest.TestCase):
+class WindowTestCase(unittest.TestCase):
+    """Isolated settings, no keyring, and no background update check (which would hit the network)."""
+
     def setUp(self):
         self.data = tempfile.TemporaryDirectory()
         self.addCleanup(self.data.cleanup)
-        for name, value in (("app_data", lambda: Path(self.data.name)), ("native_keyring", NoKeyring)):
-            patcher = patch.object(gui, name, value)
+        for target, name, value in ((gui, "app_data", lambda: Path(self.data.name)), (gui, "native_keyring", NoKeyring),
+                                    (gui.Window, "check_update", lambda self, silent=False: None)):
+            patcher = patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
+
+class PageNavigationTests(WindowTestCase):
     def window(self):
         window = gui.Window()
         self.addCleanup(window.deleteLater)
@@ -66,6 +74,43 @@ class PageNavigationTests(unittest.TestCase):
         (Path(self.data.name) / "settings.json").write_text(json.dumps({"page": "nope"}), encoding="utf-8")
         window = self.window()
         self.assertIs(window.pages.currentWidget(), window.subtitle_page)
+
+
+class TranscribePageTests(WindowTestCase):
+    def setUp(self):
+        super().setUp()
+        self.window = gui.Window()
+        self.addCleanup(self.window.deleteLater)
+        root = Path(__file__).resolve().parent.parent
+        self.window.transcription_service = ServiceManager([sys.executable, "-m", "transcriber", "--engine", "fake"], cwd=root)
+        self.addCleanup(self.window.transcription_service.stop)
+        self.page = self.window.transcribe_page
+
+    def wait_idle(self):
+        deadline = time.time() + 20
+        while self.page.busy() or self.page.worker is not None:
+            if time.time() > deadline:
+                self.fail("transcription did not finish")
+            app.processEvents()
+            time.sleep(0.01)
+
+    def test_only_media_files_are_added(self):
+        media = Path(self.data.name) / "a.mp3"
+        other = Path(self.data.name) / "a.txt"
+        for path in (media, other):
+            path.write_text("{}", encoding="utf-8")
+        self.page.add_files([str(media), str(other), str(media)])
+        self.assertEqual(self.page.paths, [media.resolve()])
+
+    def test_start_transcribes_files_to_srt_beside_source(self):
+        source = Path(self.data.name) / "talk.wav"
+        source.write_text(json.dumps({"duration": 60}), encoding="utf-8")
+        self.page.add_files([str(source)])
+        self.page.start_button.click()
+        self.wait_idle()
+        self.assertEqual(self.page.table.item(0, 1).text(), "已完成")
+        self.assertTrue((Path(self.data.name) / "talk.srt").exists())
+        self.assertEqual(self.page.progress.value(), 1000)
 
 
 if __name__ == "__main__":
