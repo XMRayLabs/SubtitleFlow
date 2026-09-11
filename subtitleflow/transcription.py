@@ -253,5 +253,8 @@ class TranscribeJob:
             self.event("file", index, "已完成", str(target))
             return "done"
         except (ServiceError, OSError, ValueError) as exc:
-            self.event("file", index, "失败", str(exc))
+            message = str(exc)
+            if isinstance(exc, ServiceError) and not self.service.alive():
+                message = "转录服务意外退出，下次转录时会自动重启"
+            self.event("file", index, "失败", message)
             return "failed"

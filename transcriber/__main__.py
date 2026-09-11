@@ -34,19 +34,25 @@ def wait_for_exit(pid):
 def build_service(args):
     if args.engine == "fake":
         from .fakes import FakeEngine, FakeMedia
-        return TranscriptionService(FakeEngine(), FakeMedia())
+        return TranscriptionService(FakeEngine(), FakeMedia(), args.idle_unload)
+    # 这里只创建对象；torch 等重型依赖到第一次转录加载模型时才导入
     from .engine import MossEngine, MODEL_ID
     from .media import FfmpegMedia
-    return TranscriptionService(MossEngine(args.model or MODEL_ID), FfmpegMedia(args.ffmpeg))
+    return TranscriptionService(MossEngine(args.model or MODEL_ID), FfmpegMedia(args.ffmpeg), args.idle_unload)
+
+
+def parser():
+    result = argparse.ArgumentParser(prog="transcriber", description="SubtitleFlow 转录服务")
+    result.add_argument("--engine", choices=("moss", "fake"), default="moss")
+    result.add_argument("--model", help="模型目录或 HuggingFace 模型 ID（默认在线模型）")
+    result.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件路径")
+    result.add_argument("--parent-pid", type=int, help="主程序进程号，它退出后服务随之退出")
+    result.add_argument("--idle-unload", type=float, default=600, help="空闲多少秒后卸载模型（默认 600）")
+    return result
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="transcriber", description="SubtitleFlow 转录服务")
-    parser.add_argument("--engine", choices=("moss", "fake"), default="moss")
-    parser.add_argument("--model", help="模型目录或 HuggingFace 模型 ID（默认在线模型）")
-    parser.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件路径")
-    parser.add_argument("--parent-pid", type=int, help="主程序进程号，它退出后服务随之退出")
-    args = parser.parse_args(argv)
+    args = parser().parse_args(argv)
 
     token = secrets.token_urlsafe(32)
     server = create_server(build_service(args), token)

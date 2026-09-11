@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import queue
 import threading
+import time
 import uuid
 
 from .segments import Cue, finalize_cues, latest_timestamp, parse_output, plan_segments
@@ -36,11 +37,17 @@ class Job:
 
 
 class TranscriptionService:
-    def __init__(self, engine, media):
+    """idle_unload_seconds：没有任务这么久后卸载模型、释放显存（服务进程继续运行）。"""
+
+    def __init__(self, engine, media, idle_unload_seconds=600):
         self.engine, self.media = engine, media
+        self.idle_unload_seconds = idle_unload_seconds
         self.jobs: dict[str, Job] = {}
         self.pending = queue.Queue()
+        self.engine_lock = threading.Lock()   # 处理任务时持有，卸载模型前必须拿到
+        self.last_active = time.monotonic()
         threading.Thread(target=self._worker, daemon=True).start()
+        threading.Thread(target=self._unload_when_idle, daemon=True).start()
 
     def submit(self, path, segment_seconds) -> Job:
         if not isinstance(path, str) or not Path(path).is_absolute():
@@ -71,7 +78,23 @@ class TranscriptionService:
 
     def _worker(self):
         while True:
-            self._process(self.pending.get())
+            job = self.pending.get()
+            with self.engine_lock:
+                self._process(job)
+                self.last_active = time.monotonic()
+
+    def _unload_when_idle(self):
+        while True:
+            time.sleep(min(1.0, self.idle_unload_seconds / 3))
+            idle = time.monotonic() - self.last_active >= self.idle_unload_seconds
+            if not (idle and self.engine.loaded and self.pending.empty()):
+                continue
+            if self.engine_lock.acquire(blocking=False):
+                try:
+                    if self.engine.loaded and self.pending.empty():
+                        self.engine.unload()
+                finally:
+                    self.engine_lock.release()
 
     def _process(self, job: Job):
         if job.cancel.is_set():

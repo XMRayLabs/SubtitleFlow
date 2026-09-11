@@ -101,7 +101,34 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.wait(body["id"])["status"], "done")
 
 
+class IdleUnloadTests(unittest.TestCase):
+    def test_model_is_unloaded_after_idle_period_and_reloaded_on_demand(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        source = Path(tmp.name) / "a.wav"
+        source.write_text(json.dumps({"duration": 60}), encoding="utf-8")
+        engine = FakeEngine()
+        service = TranscriptionService(engine, FakeMedia(), idle_unload_seconds=0.3)
+        job = service.submit(str(source), 300)
+        while job.status != "done":
+            time.sleep(0.01)
+        self.assertTrue(engine.loaded)
+        time.sleep(1.5)
+        self.assertFalse(engine.loaded)
+        again = service.submit(str(source), 300)
+        while again.status != "done":
+            time.sleep(0.01)
+        self.assertEqual(len(again.cues), 1)
+
+
 class ProcessTests(unittest.TestCase):
+    def test_building_the_moss_service_does_not_import_torch(self):
+        root = Path(__file__).resolve().parent.parent
+        code = ("import sys; from transcriber.__main__ import build_service, parser; "
+                "build_service(parser().parse_args([])); print('torch' in sys.modules)")
+        output = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, check=True)
+        self.assertEqual(output.stdout.strip(), "False")
+
     def test_service_process_announces_port_token_and_version(self):
         root = Path(__file__).resolve().parent.parent
         proc = subprocess.Popen([sys.executable, "-m", "transcriber", "--engine", "fake"], cwd=root,

@@ -54,6 +54,22 @@ class Window(QMainWindow):
         QTimer.singleShot(1500, lambda: self.check_update(True))
         if load_preferences:
             self.schedule_models()
+            self.warm_up_transcription()
+
+    def warm_up_transcription(self):
+        """随主程序在后台启动转录服务；服务启动时不加载模型，几乎不占资源。失败时等到转录时再重试。"""
+        service = self.transcription_service
+        if service is None:
+            return
+        from .transcription import ServiceError
+
+        def start():
+            try:
+                service.ensure()
+            except ServiceError:
+                pass
+
+        threading.Thread(target=start, daemon=True).start()
 
     def show_page(self, key):
         from .layout import PAGES

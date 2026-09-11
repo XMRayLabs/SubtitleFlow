@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 
-from subtitleflow import gui
+from subtitleflow import gui, transcription
 from subtitleflow.transcription import ServiceManager
 
 app = QApplication.instance() or QApplication([])
@@ -34,7 +34,8 @@ class WindowTestCase(unittest.TestCase):
         self.data = tempfile.TemporaryDirectory()
         self.addCleanup(self.data.cleanup)
         for target, name, value in ((gui, "app_data", lambda: Path(self.data.name)), (gui, "native_keyring", NoKeyring),
-                                    (gui.Window, "check_update", lambda self, silent=False: None)):
+                                    (gui.Window, "check_update", lambda self, silent=False: None),
+                                    (transcription, "development_command", lambda: None)):
             patcher = patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)

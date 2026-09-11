@@ -73,6 +73,22 @@ class TranscribeJobTests(unittest.TestCase):
         self.assertIn(("file", 1, "未处理", ""), events)
 
 
+    def test_service_crash_fails_the_file_and_next_run_restarts_the_service(self):
+        slow = self.source("slow.wav", duration=60, delay=30)
+        events = []
+
+        def on_event(*event):
+            events.append(event)
+            if event[:3] == ("file", 0, "转录中") and self.service.alive():
+                self.service.process.kill()
+
+        status = TranscribeJob([slow], 300, self.service, threading.Event(), on_event, poll_interval=0.05).run()
+        self.assertEqual(status, "partial")
+        self.assertTrue(any(e[:3] == ("file", 0, "失败") and "意外退出" in e[3] for e in events))
+        status, _ = self.run_job([self.source("next.wav", duration=60)])
+        self.assertEqual(status, "done")
+
+
 class SaveSrtTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
