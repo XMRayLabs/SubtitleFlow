@@ -88,6 +88,18 @@ class ServerTests(unittest.TestCase):
         _, body = request(self.base, "POST", "/v1/jobs", {"path": self.media(duration=60), "segment_seconds": 300})
         self.assertEqual(self.wait(body["id"])["status"], "done")
 
+    def test_cancel_stops_running_segment_without_waiting_for_it(self):
+        _, body = request(self.base, "POST", "/v1/jobs", {"path": self.media(duration=60, delay=30), "segment_seconds": 300})
+        while request(self.base, "GET", f"/v1/jobs/{body['id']}")[1]["status"] != "running":
+            time.sleep(0.01)
+        started = time.time()
+        self.assertEqual(request(self.base, "POST", f"/v1/jobs/{body['id']}/cancel", {})[0], 200)
+        self.assertEqual(self.wait(body["id"])["status"], "cancelled")
+        self.assertLess(time.time() - started, 2)
+        self.assertEqual(request(self.base, "GET", f"/v1/jobs/{body['id']}/result")[0], 409)
+        _, body = request(self.base, "POST", "/v1/jobs", {"path": self.media(duration=60), "segment_seconds": 300})
+        self.assertEqual(self.wait(body["id"])["status"], "done")
+
 
 class ProcessTests(unittest.TestCase):
     def test_service_process_announces_port_token_and_version(self):

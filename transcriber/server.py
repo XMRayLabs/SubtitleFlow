@@ -69,6 +69,10 @@ def create_server(service, token: str, host="127.0.0.1", port=0) -> Server:
                     return self.reply(201, job.snapshot())
             except ValueError as exc:
                 return self.reply(400, {"error": str(exc)})
+            match = JOB_PATH.match(self.path)
+            if match and match.group(2) == "/cancel":
+                job = service.cancel(match.group(1))
+                return self.reply(200, job.snapshot()) if job else self.reply(404, {"error": "任务不存在"})
             self.reply(404, {"error": "接口不存在"})
 
     return Server((host, port), Handler)

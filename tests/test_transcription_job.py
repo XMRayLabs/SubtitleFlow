@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 from subtitleflow import srt
@@ -49,6 +50,27 @@ class TranscribeJobTests(unittest.TestCase):
         self.assertFalse((self.dir / "bad.srt").exists())
         self.assertTrue((self.dir / "good.srt").exists())
         self.assertTrue(any(e[:3] == ("file", 0, "失败") and "显存不足" in e[3] for e in events))
+
+
+    def test_cancel_mid_file_leaves_no_srt_and_skips_the_rest(self):
+        slow = self.source("slow.wav", duration=60, delay=30)
+        later = self.source("later.wav", duration=60)
+        cancel = threading.Event()
+        events = []
+
+        def on_event(*event):
+            events.append(event)
+            if event[:3] == ("file", 0, "转录中"):
+                cancel.set()
+
+        started = time.time()
+        status = TranscribeJob([slow, later], 300, self.service, cancel, on_event).run()
+        self.assertEqual(status, "cancelled")
+        self.assertLess(time.time() - started, 5)
+        self.assertFalse((self.dir / "slow.srt").exists())
+        self.assertFalse((self.dir / "later.srt").exists())
+        self.assertIn(("file", 0, "已取消", ""), events)
+        self.assertIn(("file", 1, "未处理", ""), events)
 
 
 if __name__ == "__main__":

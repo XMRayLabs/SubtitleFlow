@@ -75,7 +75,10 @@ class TranscribePage(QWidget):
         self.status = label("拖入音频或视频，即可开始")
         self.status.setWordWrap(True)
         footer.addWidget(self.status, 1)
+        self.cancel_button = button("取消", self.cancel_job)
+        self.cancel_button.hide()
         self.start_button = button("开始转录", self.start, "primary")
+        footer.addWidget(self.cancel_button)
         footer.addWidget(self.start_button)
         page.addLayout(footer)
 
@@ -177,9 +180,17 @@ class TranscribePage(QWidget):
         self.set_running(False)
         self.window.worker_finished()
 
+    def cancel_job(self):
+        if self.busy():
+            self.cancel.set()
+            self.cancel_button.setEnabled(False)
+            self.status.setText("正在取消…")
+
     def set_running(self, active):
         for widget in (self.settings_group, self.add_button, self.clear_button, self.start_button):
             widget.setEnabled(not active)
+        self.cancel_button.setVisible(active)
+        self.cancel_button.setEnabled(active)
         self.start_button.setText("转录中…" if active else "开始转录")
         if active:
             self.status.setText("正在转录…")

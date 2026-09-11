@@ -203,7 +203,11 @@ class TranscribeJob:
             self.event("file", index, "处理中", "正在启动转录服务…")
             client = self.service.ensure()
             job_id = client.submit(path, self.segment_seconds)["id"]
+            cancel_sent = False
             while True:
+                if self.cancel.is_set() and not cancel_sent:
+                    client.cancel(job_id)
+                    cancel_sent = True
                 status = client.status(job_id)
                 if status["status"] in FINISHED:
                     break

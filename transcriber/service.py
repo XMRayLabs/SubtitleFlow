@@ -57,6 +57,15 @@ class TranscriptionService:
     def get(self, job_id) -> Job | None:
         return self.jobs.get(job_id)
 
+    def cancel(self, job_id) -> Job | None:
+        """立即生效：排队中的任务直接取消；进行中的任务在模型生成的下一步停止。"""
+        job = self.jobs.get(job_id)
+        if job and job.status not in FINISHED:
+            job.cancel.set()
+            if job.status == "queued":
+                job.status = "cancelled"
+        return job
+
     def health(self):
         return {"model_loaded": self.engine.loaded}
 
@@ -78,6 +87,8 @@ class TranscriptionService:
             job.status = "running"
             cues = []
             for index, segment in enumerate(plan, 1):
+                if job.cancel.is_set():
+                    raise Cancelled()
                 job.segment, job.position = index, segment.start
 
                 def on_text(raw, start=segment.start):

@@ -39,9 +39,15 @@ class MossEngine:
         torch.cuda.empty_cache()
 
     def transcribe(self, audio, on_text, should_stop):
+        """返回模型原始输出；should_stop() 为真时在下一步生成处停止（结果作废，由调用方丢弃）。"""
         import torch
+        from transformers import StoppingCriteria, StoppingCriteriaList
         from transformers.generation.streamers import BaseStreamer
         tokenizer = self.processor.tokenizer
+
+        class Stop(StoppingCriteria):
+            def __call__(self, input_ids, scores, **kwargs):
+                return torch.full((input_ids.shape[0],), should_stop(), device=input_ids.device, dtype=torch.bool)
 
         class Progress(BaseStreamer):
             def __init__(self):
@@ -64,7 +70,8 @@ class MossEngine:
         prompt_length = inputs["input_ids"].shape[1]
         try:
             with torch.inference_mode():
-                out = self.model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False, streamer=Progress())
+                out = self.model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False, streamer=Progress(),
+                                          stopping_criteria=StoppingCriteriaList([Stop()]))
         except torch.OutOfMemoryError:
             raise RuntimeError("显存不足，请调短分段时长后重试")
         finally:
