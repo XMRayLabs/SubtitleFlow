@@ -6,6 +6,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import secrets
 import sys
 import threading
@@ -41,11 +42,20 @@ def build_service(args):
     return TranscriptionService(MossEngine(args.model or MODEL_ID), FfmpegMedia(args.ffmpeg), args.idle_unload)
 
 
+def default_ffmpeg():
+    """打包版在可执行文件旁自带 ffmpeg.exe；开发环境使用 PATH 中的 ffmpeg。"""
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys.executable).with_name("ffmpeg.exe")
+        if bundled.exists():
+            return str(bundled)
+    return "ffmpeg"
+
+
 def parser():
     result = argparse.ArgumentParser(prog="transcriber", description="SubtitleFlow 转录服务")
     result.add_argument("--engine", choices=("moss", "fake"), default="moss")
     result.add_argument("--model", help="模型目录或 HuggingFace 模型 ID（默认在线模型）")
-    result.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg 可执行文件路径")
+    result.add_argument("--ffmpeg", default=default_ffmpeg(), help="ffmpeg 可执行文件路径")
     result.add_argument("--parent-pid", type=int, help="主程序进程号，它退出后服务随之退出")
     result.add_argument("--idle-unload", type=float, default=600, help="空闲多少秒后卸载模型（默认 600）")
     return result

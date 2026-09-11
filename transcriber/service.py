@@ -129,5 +129,16 @@ class TranscriptionService:
         except Cancelled:
             job.status = "cancelled"
         except Exception as exc:
-            job.error = str(exc) or type(exc).__name__
+            job.error = describe_error(exc)
             job.status = "failed"
+
+
+def describe_error(exc: BaseException) -> str:
+    """错误信息连同底层原因一起返回（第三方库常把真正的原因包在 __cause__ 里）。"""
+    messages = []
+    while exc is not None and len(messages) < 4:
+        text = str(exc) or type(exc).__name__
+        if text not in messages:
+            messages.append(text)
+        exc = exc.__cause__ or exc.__context__
+    return "：".join(messages)

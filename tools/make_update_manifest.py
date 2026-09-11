@@ -1,11 +1,10 @@
 import argparse
 import hashlib
-import base64
-import os
-from nacl.signing import SigningKey
 import json
 from pathlib import Path
 import re
+
+from signing import sign, signing_key
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--use-local-key", action="store_true")
@@ -39,29 +38,13 @@ for path in args.assets.glob("*.asset.json"):
 if not platforms:
     raise ValueError("No installer metadata found")
 payload = json.dumps({"version": args.version, "platforms": platforms}, separators=(",", ":")).encode()
-seed = os.environ.get("SUBTITLEFLOW_UPDATE_SIGNING_KEY")
-key_id = os.environ.get("SUBTITLEFLOW_UPDATE_KEY_ID")
-if args.use_local_key:
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from subtitleflow.gui import native_keyring
-    seed = native_keyring().get_password("SubtitleFlow-release", "ed25519-v1")
-    key_id = "release-v1"
-    if not seed:
-        raise ValueError("Local signing key unavailable")
+key_id, seed = signing_key(args.use_local_key)
 if not seed or not key_id:
     # Keep installer drafts usable, but never publish an unsigned update.json.
     args.output.unlink(missing_ok=True)
     print("Signing key not configured; update.json intentionally omitted")
 else:
-    key = SigningKey(bytes.fromhex(seed))
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from subtitleflow.update_trust import TRUSTED_UPDATE_KEYS
-    if TRUSTED_UPDATE_KEYS.get(key_id) != key.verify_key.encode().hex():
-        raise ValueError("Signing key does not match embedded public key")
-    envelope = {"key_id": key_id, "payload": base64.b64encode(payload).decode(),
-                "signature": base64.b64encode(key.sign(payload).signature).decode()}
+    envelope = sign(payload, key_id, seed)
     # Compatibility for pre-signature clients; new clients trust only the verified payload.
     envelope.update(json.loads(payload))
     args.output.write_text(json.dumps(envelope, indent=2), encoding="utf-8")

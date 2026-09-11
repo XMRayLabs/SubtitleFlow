@@ -45,6 +45,16 @@ main 推送自动构建三平台完整应用 ZIP 并上传 Actions artifacts；�
 草稿发布后才会被客户端 latest 检查发现；发布稳定版前必须上传正式安装包和 update.json，完成既有 release_gate 审核及平台签名。
 默认官方仓库为 XMRayLabs/SubtitleFlow，旧设置中空仓库会迁移到官方值。
 
+## 转录服务发布
+
+转录服务独立于主程序构建和发布（见 docs/adr/0001）。标签 `transcriber-vX.Y.Z` 触发 `.github/workflows/transcriber.yml`；主程序的 `vX.Y.Z` 标签不会构建转录服务，反之亦然。
+
+1. 在仓库变量中设置经过许可审核的静态 LGPL ffmpeg 下载地址 `TRANSCRIBER_FFMPEG_URL` 及其 `TRANSCRIBER_FFMPEG_SHA256`，工作流校验不符即失败。
+2. 工作流构建 PyInstaller onedir 服务包，用假模型验证可独立启动，下载固定 revision 的模型计算逐文件哈希（模型不上传），压缩后按 1900 MiB 分卷，并创建 Release 草稿。
+3. 使用本机密钥签署清单：`python tools/transcriber_release.py --use-local-key --version X.Y.Z --dist <onedir> --model-dir <模型目录> --model-revision <完整提交哈希> --output release-assets`，上传 `transcriber.json`。
+4. 发布时**不得**将转录服务 Release 设为 latest：主程序的更新检查读取 releases/latest，只能看到主程序版本。
+5. 主程序在 `subtitleflow/transcriber_install.py` 的 `TRANSCRIBER_TAG` 固定配套的服务标签。服务接口不兼容时递增 `transcriber.API_VERSION` 与主程序的 `TRANSCRIBER_API_VERSION`，并随新主程序修改 `TRANSCRIBER_TAG`；接口兼容时主程序升级不要求重新下载服务。
+
 ## 0.1.3 安全发布变更
 
 构建依赖使用 requirements-bootstrap.lock 和 requirements-build.lock，执行 --require-hashes --only-binary=:all:。CI 产物附 dependency-audit.json、sbom.json 与 binary-inventory.json。禁止跳过安全检查来发布稳定版本。

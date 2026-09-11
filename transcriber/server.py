@@ -60,11 +60,15 @@ def create_server(service, token: str, host="127.0.0.1", port=0) -> Server:
             self.reply(200, job.snapshot())
 
         def do_POST(self):
+            # 先读完请求体：Windows 上关闭仍有未读数据的连接会发送 RST，客户端收不到响应
+            try:
+                data = self.body()
+            except ValueError as exc:
+                return self.reply(400, {"error": str(exc)})
             if not self.authorized():
                 return
             try:
                 if self.path == "/v1/jobs":
-                    data = self.body()
                     job = service.submit(data.get("path"), data.get("segment_seconds"))
                     return self.reply(201, job.snapshot())
             except ValueError as exc:
