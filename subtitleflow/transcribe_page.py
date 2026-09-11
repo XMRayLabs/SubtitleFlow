@@ -27,6 +27,7 @@ class TranscribePage(QWidget):
         self.mode = "transcribe"             # 当前后台任务：transcribe（转录）或 install（安装转录服务）
         self.cancel = threading.Event()
         self.fractions = {}
+        self.transcription_complete = False
         self.rows: list[int] = []            # 本次任务处理的行（重试时只是其中一部分）
         self.outputs: dict[int, Path] = {}   # 行 → 实际保存的 SRT 路径
         self.last_output_row = None          # 最近完成的行，「查看结果」默认打开它
@@ -274,6 +275,7 @@ class TranscribePage(QWidget):
             return
         self.window.save_preferences()
         self.mode = "transcribe"
+        self.transcription_complete = False
         self.rows = list(range(len(self.paths))) if rows is None else rows
         self.cancel = threading.Event()
         self.fractions = {}
@@ -287,7 +289,7 @@ class TranscribePage(QWidget):
         self.worker = Worker(lambda event: TranscribeJob(paths, minutes * 60, service, cancel, event).run())
         self.window.workers.append(self.worker)
         self.worker.event.connect(self.job_event)
-        self.worker.failed.connect(self.window.error)
+        self.worker.failed.connect(self.transcription_failed)
         self.worker.finished.connect(self.job_finished)
         self.worker.start()
 
@@ -317,11 +319,18 @@ class TranscribePage(QWidget):
         elif kind == "incompatible":
             self.window.mark_transcription_outdated()
         elif kind == "complete":
+            self.transcription_complete = True
             self.status.setText({"done": "全部转录完成，SRT 保存位置见「进度 / 说明」",
                                  "partial": "部分文件转录失败，可以重试未完成的文件",
                                  "cancelled": "转录已取消，已完成的 SRT 已保留"}[values[0]])
+            QTimer.singleShot(0, self._complete_job)
         if self.rows:
             self.progress.setValue(round(1000 * sum(self.fractions.values()) / len(self.rows)))
+
+    def transcription_failed(self, message):
+        self.window.error(message)
+        self.transcription_complete = True
+        QTimer.singleShot(0, self._complete_job)
 
     def update_result_buttons(self):
         idle = not self.busy()
@@ -340,6 +349,8 @@ class TranscribePage(QWidget):
 
     def job_finished(self):
         # finished 信号发出时线程可能还没完全退出；先等它结束，再释放 QThread 对象
+        if self.mode == "transcribe" and not self.transcription_complete:
+            return
         QTimer.singleShot(0, self._complete_job)
 
     def _complete_job(self):
