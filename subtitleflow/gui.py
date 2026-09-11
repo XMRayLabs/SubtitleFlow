@@ -44,17 +44,57 @@ class Window(QMainWindow):
         self.update_cancel = threading.Event()
         self.pending_update = None
         self.update_busy = False
-        from .transcription import ServiceManager, development_command
-        command = development_command()
-        self.transcription_service = ServiceManager(*command) if command else None
+        from .transcriber_install import default_root
+        self.transcriber_root = default_root()
+        self.transcription_service = None
+        self.transcription_installed = None
+        self.transcription_outdated = False
         from .layout import build
         build(self, FileTable)
         if load_preferences:
             self.load_settings()
+        self.refresh_transcription_service()
         QTimer.singleShot(1500, lambda: self.check_update(True))
         if load_preferences:
             self.schedule_models()
             self.warm_up_transcription()
+
+    def refresh_transcription_service(self):
+        """优先使用已安装的转录服务，其次是开发环境；都没有时转录页显示安装入口。
+        已安装的服务接口版本不兼容时，转录页提示更新转录服务。"""
+        from .transcriber_install import installed_service
+        from .transcription import ServiceManager, TRANSCRIBER_API_VERSION, development_command
+        if self.transcription_service:
+            self.transcription_service.stop()
+        self.transcription_service = None
+        self.transcription_installed = installed_service(self.transcriber_root)
+        installed = self.transcription_installed
+        self.transcription_outdated = installed is not None and installed.api_version != TRANSCRIBER_API_VERSION
+        if installed and not self.transcription_outdated:
+            self.transcription_service = ServiceManager(installed.command(), cwd=installed.exe.parent)
+        elif not installed:
+            command = development_command()
+            self.transcription_service = ServiceManager(*command) if command else None
+        self.uninstall_action.setVisible(installed is not None)
+        self.transcribe_page.refresh_state(update_status=True)
+
+    def uninstall_transcriber(self):
+        from .transcriber_install import uninstall
+        if self.transcribe_page.busy():
+            self.error("转录或安装进行中，请结束后再卸载转录服务")
+            return
+        if QMessageBox.question(self, "卸载转录服务", "将删除转录服务和模型文件，之后需要重新下载才能转录。确定卸载？") != QMessageBox.Yes:
+            return
+        if self.transcription_service:
+            self.transcription_service.stop()
+        try:
+            freed = uninstall(self.transcriber_root)
+        except OSError as exc:
+            self.error(f"卸载未完成：{exc}")
+            return
+        finally:
+            self.refresh_transcription_service()
+        QMessageBox.information(self, "卸载转录服务", f"已卸载转录服务，释放 {freed / 1024 ** 3:.1f} GB 空间")
 
     def warm_up_transcription(self):
         """随主程序在后台启动转录服务；服务启动时不加载模型，几乎不占资源。失败时等到转录时再重试。"""
@@ -197,7 +237,7 @@ class Window(QMainWindow):
         data = {"base": self.base.text(), "model": self.model.currentText(), "output": self.output.text(),
                 "repo": self.repo.text().strip(), "remember": self.remember.isChecked(),
                 "local_cert": self.local_cert.isChecked(), "page": self.page,
-                "transcribe": self.transcribe_page.settings(),
+                "transcribe": self.transcribe_page.settings(), "transcriber_root": str(self.transcriber_root),
                 "options": asdict(self.options())}
         if self.remember.isChecked():
             native_keyring().set_password("SubtitleFlow", "api-key", self.key.text())
@@ -225,6 +265,8 @@ class Window(QMainWindow):
             self.remember.setChecked(data.get("remember", False))
             self.apply_options(data.get("options", {}))
             self.transcribe_page.apply_settings(data.get("transcribe", {}))
+            if data.get("transcriber_root"):
+                self.transcriber_root = Path(data["transcriber_root"])
             self.show_page(data.get("page"))
             if self.remember.isChecked():
                 self.key.setText(native_keyring().get_password("SubtitleFlow", "api-key") or "")

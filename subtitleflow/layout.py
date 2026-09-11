@@ -95,6 +95,8 @@ def build(window, table_type):
     menu = QMenu(more)
     w.restore_button = menu.addAction("恢复未完成任务", w.restore)
     menu.addAction("软件更新", w.show_update)
+    w.uninstall_action = menu.addAction("卸载转录服务", w.uninstall_transcriber)
+    w.uninstall_action.setVisible(False)
     menu.addSeparator()
     menu.addAction("关于与版权", w.about)
     more.setMenu(menu)

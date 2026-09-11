@@ -6,7 +6,9 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QSpinBox, QProgressBar, QFileDialog, QTableWidgetItem
 
+from .transcriber_install import Installer, fetch_release, support_problem
 from .transcription import TranscribeJob, is_media, MEDIA_SUFFIXES
+from .updates import DEFAULT_REPO
 from .widgets import FileTable, Worker
 
 DEFAULT_SEGMENT_MINUTES = 5
@@ -21,6 +23,7 @@ class TranscribePage(QWidget):
         self.window = window
         self.paths: list[Path] = []
         self.worker = None
+        self.mode = "transcribe"             # 当前后台任务：transcribe（转录）或 install（安装转录服务）
         self.cancel = threading.Event()
         self.fractions = {}
         self.rows: list[int] = []            # 本次任务处理的行（重试时只是其中一部分）
@@ -85,10 +88,112 @@ class TranscribePage(QWidget):
         self.retry_button.hide()
         self.cancel_button = button("取消", self.cancel_job)
         self.cancel_button.hide()
-        self.start_button = button("开始转录", lambda: self.start(), "primary")
+        self.start_button = button("开始转录", self.primary_action, "primary")
         for item in (self.open_button, self.retry_button, self.cancel_button, self.start_button):
             footer.addWidget(item)
         page.addLayout(footer)
+
+    # ---- 转录服务状态与安装 ---------------------------------------------
+
+    def refresh_state(self, update_status=False):
+        """根据转录服务是否可用，切换主按钮：开始转录 / 安装转录服务 / 暂不支持。"""
+        if self.busy():
+            return
+        if self.window.transcription_service is not None:
+            self.start_button.setText("开始转录")
+            self.start_button.setEnabled(True)
+            return
+        if self.window.transcription_outdated:
+            self.start_button.setText("更新转录服务")
+            self.start_button.setEnabled(True)
+            if update_status:
+                self.status.setText("转录服务需要更新才能与当前版本的软件配合使用")
+            return
+        problem = support_problem()
+        self.start_button.setText("暂不支持" if problem else "安装转录服务")
+        self.start_button.setEnabled(not problem)
+        if update_status:
+            self.status.setText(problem or "首次使用需要先安装转录服务（需要下载数 GB），也可以先添加文件")
+
+    def primary_action(self):
+        if self.window.transcription_service is None:
+            self.begin_install()
+        else:
+            self.start()
+
+    def begin_install(self):
+        if self.busy() or support_problem():
+            return
+        repo = self.window.repo.text().strip() or DEFAULT_REPO
+        self.status.setText("正在获取转录服务信息…")
+        self.start_button.setEnabled(False)
+        self.window.launch(lambda _: fetch_release(repo), lambda release: self.confirm_install(release, repo),
+                           self.install_failed)
+
+    def install_failed(self, message):
+        self.refresh_state()
+        if self.cancel.is_set():
+            self.status.setText("安装已暂停，再次点击「安装转录服务」会从断点继续")
+            return
+        self.status.setText(f"转录服务安装失败：{message}")
+        self.window.error(message)
+
+    def confirm_install(self, release, repo):
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLineEdit
+        from .layout import row, label, button
+        dialog = QDialog(self)
+        dialog.setWindowTitle("安装转录服务")
+        dialog.setMinimumWidth(560)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(14)
+        layout.addWidget(label("安装转录服务", "section"))
+        info = label(f"需要下载约 {release.total_size / 1024 ** 3:.1f} GB（转录服务与模型），"
+                     f"安装后约占用 {release.total_size * 1.6 / 1024 ** 3:.0f} GB 磁盘空间。\n"
+                     "中途中断不要紧，下次安装会从断点继续。")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+        folder = QLineEdit(str(self.window.transcriber_root))
+
+        def choose():
+            chosen = QFileDialog.getExistingDirectory(dialog, "选择安装位置", folder.text())
+            if chosen:
+                folder.setText(str(Path(chosen) / "SubtitleFlow"))
+
+        layout.addLayout(row(label("安装到"), folder, button("选择", choose)))
+        buttons = QDialogButtonBox()
+        buttons.addButton("开始安装", QDialogButtonBox.AcceptRole)
+        buttons.addButton("取消", QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.Accepted or not folder.text().strip():
+            self.refresh_state()
+            return
+        self.window.transcriber_root = Path(folder.text().strip())
+        self.window.save_preferences()
+        self.run_install(release, repo)
+
+    def run_install(self, release, repo):
+        self.cancel = threading.Event()
+        root, cancel = self.window.transcriber_root, self.cancel
+        self.mode = "install"
+        self.set_running(True)
+        self.status.setText("正在安装转录服务…")
+        self.worker = Worker(lambda event: Installer(release, root, cancel, lambda *p: event("install", *p), repo=repo).run())
+        self.window.workers.append(self.worker)
+        self.worker.event.connect(self.install_event)
+        self.worker.failed.connect(self.install_failed)
+        self.worker.succeeded.connect(lambda _: self.window.refresh_transcription_service())
+        self.worker.succeeded.connect(lambda _: self.window.warm_up_transcription())
+        self.worker.succeeded.connect(lambda _: self.status.setText("转录服务已安装，可以开始转录"))
+        self.worker.finished.connect(self.job_finished)
+        self.worker.start()
+
+    def install_event(self, args):
+        _, done, total, step = args
+        self.progress.setValue(round(1000 * done / max(total, 1)))
+        self.status.setText(f"{step}：{done / 1024 ** 3:.2f} GB / {total / 1024 ** 3:.2f} GB")
 
     # ---- 设置 ----------------------------------------------------------
 
@@ -156,6 +261,7 @@ class TranscribePage(QWidget):
             self.window.error("尚未安装转录服务")
             return
         self.window.save_preferences()
+        self.mode = "transcribe"
         self.rows = list(range(len(self.paths))) if rows is None else rows
         self.cancel = threading.Event()
         self.fractions = {}
@@ -228,10 +334,13 @@ class TranscribePage(QWidget):
             widget.setEnabled(not active)
         self.cancel_button.setVisible(active)
         self.cancel_button.setEnabled(active)
-        self.start_button.setText("转录中…" if active else "开始转录")
+        self.window.uninstall_action.setEnabled(not active)
         if active:
-            self.status.setText("正在转录…")
+            self.start_button.setText("安装中…" if self.mode == "install" else "转录中…")
+            if self.mode == "transcribe":
+                self.status.setText("正在转录…")
             self.open_button.hide()
             self.retry_button.hide()
         else:
             self.update_result_buttons()
+            self.refresh_state()

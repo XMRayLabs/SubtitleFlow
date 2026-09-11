@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 
-from subtitleflow import gui, transcription
+from subtitleflow import gui, transcribe_page, transcriber_install, transcription
 from subtitleflow.transcription import ServiceManager
 
 app = QApplication.instance() or QApplication([])
@@ -35,7 +35,8 @@ class WindowTestCase(unittest.TestCase):
         self.addCleanup(self.data.cleanup)
         for target, name, value in ((gui, "app_data", lambda: Path(self.data.name)), (gui, "native_keyring", NoKeyring),
                                     (gui.Window, "check_update", lambda self, silent=False: None),
-                                    (transcription, "development_command", lambda: None)):
+                                    (transcription, "development_command", lambda: None),
+                                    (transcriber_install, "default_root", lambda: Path(self.data.name) / "install")):
             patcher = patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -127,6 +128,62 @@ class TranscribePageTests(WindowTestCase):
         self.assertEqual(self.page.table.item(0, 1).text(), "失败")
         self.assertEqual(self.page.table.item(1, 1).text(), "已完成")
         self.assertFalse((Path(self.data.name) / "good (1).srt").exists())
+
+
+class ServiceStateTests(WindowTestCase):
+    def window_with(self, problem):
+        with patch.object(transcribe_page, "support_problem", return_value=problem):
+            window = gui.Window()
+        self.addCleanup(window.deleteLater)
+        return window
+
+    def test_without_service_offers_installation(self):
+        page = self.window_with(None).transcribe_page
+        self.assertEqual(page.start_button.text(), "安装转录服务")
+        self.assertTrue(page.start_button.isEnabled())
+
+    def test_unsupported_device_explains_why_and_offers_no_install(self):
+        page = self.window_with("当前设备暂不支持音频转录（需要 NVIDIA 显卡）").transcribe_page
+        self.assertEqual(page.start_button.text(), "暂不支持")
+        self.assertFalse(page.start_button.isEnabled())
+        self.assertIn("NVIDIA", page.status.text())
+
+    def install_fake_service(self, api_version=1):
+        base = Path(self.data.name) / "install" / "transcriber"
+        exe = base / "service" / "1.0.0" / "S" / "S.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"MZ")
+        (base / "models" / "rev").mkdir(parents=True)
+        (base / "installed.json").write_text(json.dumps(
+            {"version": "1.0.0", "api_version": api_version, "exe": "service/1.0.0/S/S.exe", "model_dir": "models/rev"}),
+            encoding="utf-8")
+        return exe
+
+    def test_installed_service_is_used(self):
+        exe = self.install_fake_service()
+        window = self.window_with(None)
+        self.assertEqual(window.transcription_installed.exe, exe)
+        self.assertEqual(window.transcription_service.command[0], str(exe))
+        self.assertEqual(window.transcribe_page.start_button.text(), "开始转录")
+
+    def test_incompatible_installed_service_asks_for_update(self):
+        self.install_fake_service(api_version=0)
+        window = self.window_with(None)
+        self.assertIsNone(window.transcription_service)
+        self.assertEqual(window.transcribe_page.start_button.text(), "更新转录服务")
+        self.assertIn("需要更新", window.transcribe_page.status.text())
+
+    def test_uninstall_is_offered_only_when_installed_and_returns_to_install_state(self):
+        self.assertFalse(self.window_with(None).uninstall_action.isVisible())
+        self.install_fake_service()
+        window = self.window_with(None)
+        self.assertTrue(window.uninstall_action.isVisible())
+        with patch.object(gui.QMessageBox, "question", return_value=gui.QMessageBox.Yes), \
+                patch.object(gui.QMessageBox, "information"), patch.object(transcribe_page, "support_problem", return_value=None):
+            window.uninstall_action.trigger()
+        self.assertIsNone(transcriber_install.installed_service(Path(self.data.name) / "install"))
+        self.assertFalse(window.uninstall_action.isVisible())
+        self.assertEqual(window.transcribe_page.start_button.text(), "安装转录服务")
 
 
 if __name__ == "__main__":
