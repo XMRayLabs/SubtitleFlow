@@ -1,0 +1,5 @@
+# 转录服务自己的运行环境依赖（不属于主程序）。
+# 安装：pip install -r transcriber/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+transformers==5.17.0
+numpy==2.5.3

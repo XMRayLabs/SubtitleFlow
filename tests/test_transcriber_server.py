@@ -1,0 +1,106 @@
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import urllib.error
+import urllib.request
+
+from transcriber import API_VERSION
+from transcriber.fakes import FakeEngine, FakeMedia
+from transcriber.server import create_server
+from transcriber.service import TranscriptionService
+
+TOKEN = "test-token"
+
+
+def request(base, method, path, body=None, token=TOKEN):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(base + path, data=data, method=method)
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    if data:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read() or b"{}")
+
+
+class ServerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.server = create_server(TranscriptionService(FakeEngine(), FakeMedia()), TOKEN)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.base = "http://127.0.0.1:%d" % self.server.server_address[1]
+
+    def media(self, **spec):
+        path = Path(self.tmp.name) / f"media-{len(list(Path(self.tmp.name).iterdir()))}.wav"
+        path.write_text(json.dumps(spec), encoding="utf-8")
+        return str(path)
+
+    def wait(self, job_id):
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            _, status = request(self.base, "GET", f"/v1/jobs/{job_id}")
+            if status["status"] in ("done", "failed", "cancelled"):
+                return status
+            time.sleep(0.02)
+        self.fail("job did not finish")
+
+    def test_requests_without_valid_token_are_rejected(self):
+        self.assertEqual(request(self.base, "GET", "/v1/health", token=None)[0], 401)
+        self.assertEqual(request(self.base, "GET", "/v1/health", token="wrong")[0], 401)
+        status, body = request(self.base, "GET", "/v1/health")
+        self.assertEqual((status, body["api_version"]), (200, API_VERSION))
+
+    def test_transcribes_source_file_into_whole_file_cues(self):
+        source = self.media(duration=700, silences=[[299, 301]])
+        status, body = request(self.base, "POST", "/v1/jobs", {"path": source, "segment_seconds": 300})
+        self.assertEqual(status, 201)
+        final = self.wait(body["id"])
+        self.assertEqual((final["status"], final["segment"], final["segments"], final["duration"]), ("done", 2, 2, 700))
+        status, result = request(self.base, "GET", f"/v1/jobs/{body['id']}/result")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["cues"], [
+            {"start": 0, "end": 300000, "text": "第1段"},
+            {"start": 300000, "end": 700000, "text": "第2段"},
+        ])
+
+    def test_missing_source_file_is_rejected(self):
+        status, body = request(self.base, "POST", "/v1/jobs", {"path": str(Path(self.tmp.name) / "none.wav"), "segment_seconds": 300})
+        self.assertEqual(status, 400)
+        self.assertIn("源文件不存在", body["error"])
+
+    def test_engine_failure_fails_job_and_service_keeps_working(self):
+        source = self.media(duration=60, fail="显存不足")
+        _, body = request(self.base, "POST", "/v1/jobs", {"path": source, "segment_seconds": 300})
+        final = self.wait(body["id"])
+        self.assertEqual(final["status"], "failed")
+        self.assertIn("显存不足", final["error"])
+        _, body = request(self.base, "POST", "/v1/jobs", {"path": self.media(duration=60), "segment_seconds": 300})
+        self.assertEqual(self.wait(body["id"])["status"], "done")
+
+
+class ProcessTests(unittest.TestCase):
+    def test_service_process_announces_port_token_and_version(self):
+        root = Path(__file__).resolve().parent.parent
+        proc = subprocess.Popen([sys.executable, "-m", "transcriber", "--engine", "fake"], cwd=root,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.addCleanup(proc.wait, 10)
+        self.addCleanup(proc.kill)
+        hello = json.loads(proc.stdout.readline())
+        self.assertEqual(hello["api_version"], API_VERSION)
+        status, _ = request(f"http://127.0.0.1:{hello['port']}", "GET", "/v1/health", token=hello["token"])
+        self.assertEqual(status, 200)
+
+
+if __name__ == "__main__":
+    unittest.main()
