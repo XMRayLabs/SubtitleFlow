@@ -47,7 +47,7 @@ main 推送自动构建三平台完整应用 ZIP 并上传 Actions artifacts；�
 
 ## 转录服务发布
 
-转录服务独立于主程序构建和发布（见 docs/adr/0001）。标签 `transcriber-vX.Y.Z` 触发 `.github/workflows/transcriber.yml`；主程序的 `vX.Y.Z` 标签不会构建转录服务，反之亦然。
+转录服务独立于主程序构建和发布：主程序只通过本机 HTTP 接口调用服务，不包含 torch 等重型依赖。标签 `transcriber-vX.Y.Z` 触发 `.github/workflows/transcriber.yml`；主程序的 `vX.Y.Z` 标签不会构建转录服务，反之亦然。
 
 1. 在仓库变量中设置经过许可审核的静态 LGPL ffmpeg 下载地址 `TRANSCRIBER_FFMPEG_URL` 及其 `TRANSCRIBER_FFMPEG_SHA256`，工作流校验不符即失败。
 2. 工作流构建 PyInstaller onedir 服务包，用假模型验证可独立启动，下载固定 revision 的模型计算逐文件哈希（模型不上传），压缩后按 1900 MiB 分卷，并创建 Release 草稿。

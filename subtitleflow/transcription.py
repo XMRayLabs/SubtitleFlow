@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 
 from . import srt
+from .safety import response_json
 
 # 主程序支持的转录服务接口版本；与服务端 transcriber.API_VERSION 对应
 TRANSCRIBER_API_VERSION = 1
@@ -37,11 +38,17 @@ def is_media(path) -> bool:
 
 
 def development_command():
-    """开发环境：用当前（装有 torch 的）解释器以模块方式运行仓库里的转录服务。"""
-    if getattr(sys, "frozen", False) or importlib.util.find_spec("torch") is None:
+    """开发环境：以模块方式运行仓库里的转录服务。解释器可用环境变量 SUBTITLEFLOW_TRANSCRIBER_PYTHON
+    指定（装有 torch 的环境），否则使用当前解释器（需已装 torch）。"""
+    if getattr(sys, "frozen", False):
         return None
     root = Path(__file__).resolve().parent.parent
     if not (root / "transcriber" / "__main__.py").exists():
+        return None
+    python = os.environ.get("SUBTITLEFLOW_TRANSCRIBER_PYTHON")
+    if python:
+        return [python, "-m", "transcriber"], root
+    if importlib.util.find_spec("torch") is None:
         return None
     return [sys.executable, "-m", "transcriber"], root
 
@@ -58,11 +65,11 @@ class ServiceClient:
             req.add_header("Content-Type", "application/json")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                return json.loads(resp.read())
+                return response_json(resp)
         except urllib.error.HTTPError as exc:
             try:
-                message = json.loads(exc.read()).get("error")
-            except ValueError:
+                message = response_json(exc).get("error")
+            except (ValueError, AttributeError):
                 message = None
             raise ServiceError(message or f"转录服务返回错误 {exc.code}")
         except (urllib.error.URLError, OSError):
@@ -126,7 +133,7 @@ class ServiceManager:
         reader.start()
         reader.join(self.startup_timeout)
         if not {"port", "token", "api_version"} <= hello.keys():
-            self.stop()
+            self._stop()
             raise ServiceError("转录服务启动失败")
         # 服务之后的输出（第三方库的提示等）持续读走，避免管道写满卡住服务；读到结尾时关闭管道
         def drain(stream=self.process.stdout):
@@ -136,11 +143,16 @@ class ServiceManager:
         threading.Thread(target=drain, daemon=True).start()
         self.draining = True
         if hello["api_version"] != TRANSCRIBER_API_VERSION:
-            self.stop()
+            self._stop()
             raise IncompatibleService("转录服务版本与当前软件不兼容，需要更新转录服务")
         self.client = ServiceClient(f"http://127.0.0.1:{hello['port']}", hello["token"])
 
     def stop(self):
+        # 与 ensure() 共用锁：避免后台预热正在启动服务时被卸载或关闭窗口打断到一半
+        with self.lock:
+            self._stop()
+
+    def _stop(self):
         process, self.process, self.client = self.process, None, None
         if process and process.poll() is None:
             process.terminate()
@@ -176,13 +188,17 @@ def default_fallback_dirs() -> list[Path]:
     return [Path.home() / "SubtitleFlow输出" / "转录", Path(local) / "SubtitleFlow" / "转录输出"]
 
 
-def free_name(directory: Path, stem: str) -> Path:
-    """同名 SRT 已存在时依次改名为 `名称 (1).srt`、`名称 (2).srt`……，从不覆盖已有文件。"""
-    target, count = directory / f"{stem}.srt", 0
-    while target.exists():
-        count += 1
-        target = directory / f"{stem} ({count}).srt"
-    return target
+def reserve_name(directory: Path, stem: str) -> Path:
+    """同名 SRT 已存在时依次改名为 `名称 (1).srt`、`名称 (2).srt`……，从不覆盖已有文件。
+    用独占创建的占位文件确定名字，避免"检查不存在"与写入之间被其他程序抢先创建同名文件。"""
+    count = 0
+    while True:
+        target = directory / (f"{stem}.srt" if count == 0 else f"{stem} ({count}).srt")
+        try:
+            target.open("x").close()
+            return target
+        except FileExistsError:
+            count += 1
 
 
 def save_srt(source: Path, cues, fallback_dirs) -> Path:
@@ -192,8 +208,12 @@ def save_srt(source: Path, cues, fallback_dirs) -> Path:
         try:
             if index:
                 directory.mkdir(parents=True, exist_ok=True)
-            target = free_name(directory, source.stem)
-            srt.write(target, cues)
+            target = reserve_name(directory, source.stem)
+            try:
+                srt.write(target, cues)
+            except BaseException:
+                target.unlink(missing_ok=True)
+                raise
             return target
         except (OSError, ValueError) as exc:
             error = exc
@@ -251,9 +271,16 @@ class TranscribeJob:
             target = save_srt(path, client.result(job_id), self.fallback_dirs)
             self.event("progress", index, 1.0)
             self.event("file", index, "已完成", str(target))
+            if status.get("forced"):
+                self.event("warning", index, f"有 {status['forced']} 处切点附近没有静音，字幕可能在句子中间断开")
             return "done"
-        except (ServiceError, OSError, ValueError) as exc:
-            message = str(exc)
+        except IncompatibleService as exc:
+            self.event("incompatible")
+            self.event("file", index, "失败", str(exc))
+            return "failed"
+        except (ServiceError, OSError, ValueError, KeyError, TypeError) as exc:
+            # KeyError / TypeError：服务返回的内容缺字段或格式不对，按失败处理，不中断整批
+            message = str(exc) if not isinstance(exc, (KeyError, TypeError)) else "转录服务返回了无法识别的结果"
             if isinstance(exc, ServiceError) and not self.service.alive():
                 message = "转录服务意外退出，下次转录时会自动重启"
             self.event("file", index, "失败", message)

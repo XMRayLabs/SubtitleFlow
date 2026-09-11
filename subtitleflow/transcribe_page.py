@@ -1,13 +1,14 @@
 """音频转录页：拖入音频或视频，转录为源文件旁的 SRT。与字幕处理页各自独立运行。"""
 from pathlib import Path
 import threading
+import time
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QSpinBox, QProgressBar, QFileDialog, QTableWidgetItem
 
 from .transcriber_install import Installer, fetch_release, support_problem
-from .transcription import TranscribeJob, is_media, MEDIA_SUFFIXES
+from .transcription import TranscribeJob, fmt_time, is_media, MEDIA_SUFFIXES
 from .updates import DEFAULT_REPO
 from .widgets import FileTable, Worker
 
@@ -28,6 +29,8 @@ class TranscribePage(QWidget):
         self.fractions = {}
         self.rows: list[int] = []            # 本次任务处理的行（重试时只是其中一部分）
         self.outputs: dict[int, Path] = {}   # 行 → 实际保存的 SRT 路径
+        self.last_output_row = None          # 最近完成的行，「查看结果」默认打开它
+        self.install_clock = None            # (开始时间, 开始时的已下载字节)，用于计算安装速度
 
         page = QVBoxLayout(self)
         page.setContentsMargins(0, 0, 0, 0)
@@ -68,7 +71,7 @@ class TranscribePage(QWidget):
         self.segment_minutes.setValue(DEFAULT_SEGMENT_MINUTES)
         self.segment_minutes.setSuffix(" 分钟")
         self.segment_minutes.setFixedWidth(115)
-        segment_row = row(label("分段时长", "section"), self.segment_minutes, label("显存较小或转录失败时可以调短"))
+        segment_row = row(label("分段时长", "section"), self.segment_minutes, label("切点取前后 2 分钟内的静音处；显存较小或转录失败时可以调短"))
         segment_row.addStretch()
         settings.addLayout(segment_row)
         page.addWidget(self.settings_group)
@@ -149,7 +152,7 @@ class TranscribePage(QWidget):
         layout.setSpacing(14)
         layout.addWidget(label("安装转录服务", "section"))
         info = label(f"需要下载约 {release.total_size / 1024 ** 3:.1f} GB（转录服务与模型），"
-                     f"安装后约占用 {release.total_size * 1.6 / 1024 ** 3:.0f} GB 磁盘空间。\n"
+                     "解压后占用的空间比下载量更大，请确保安装位置空间充足。\n"
                      "中途中断不要紧，下次安装会从断点继续。")
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -178,6 +181,7 @@ class TranscribePage(QWidget):
         self.cancel = threading.Event()
         root, cancel = self.window.transcriber_root, self.cancel
         self.mode = "install"
+        self.install_clock = None
         self.set_running(True)
         self.status.setText("正在安装转录服务…")
         self.worker = Worker(lambda event: Installer(release, root, cancel, lambda *p: event("install", *p), repo=repo).run())
@@ -192,8 +196,16 @@ class TranscribePage(QWidget):
 
     def install_event(self, args):
         _, done, total, step = args
+        now = time.monotonic()
+        if self.install_clock is None:
+            self.install_clock = (now, done)   # 续传时从已有进度开始计速
+        started, first = self.install_clock
         self.progress.setValue(round(1000 * done / max(total, 1)))
-        self.status.setText(f"{step}：{done / 1024 ** 3:.2f} GB / {total / 1024 ** 3:.2f} GB")
+        text = f"{step}：{done / 1024 ** 3:.2f} GB / {total / 1024 ** 3:.2f} GB"
+        speed = (done - first) / (now - started) if now - started >= 2 else 0
+        if speed > 0:
+            text += f" · {speed / 1024 ** 2:.1f} MB/s · 剩余约 {fmt_time((total - done) / speed)}"
+        self.status.setText(text)
 
     # ---- 设置 ----------------------------------------------------------
 
@@ -291,10 +303,19 @@ class TranscribePage(QWidget):
             self.set_row(row_index, status, detail)
             if status == "已完成":
                 self.outputs[row_index] = Path(detail)
+                self.last_output_row = row_index
             if status in RETRYABLE:
                 self.fractions[row_index] = 1.0
         elif kind == "progress":
             self.fractions[self.rows[values[0]]] = values[1]
+        elif kind == "warning":
+            row_index = self.rows[values[0]]
+            for col in range(3):
+                self.table.item(row_index, col).setToolTip(values[1])
+            self.table.item(row_index, 1).setText("已完成（注意）")
+            self.table.item(row_index, 1).setForeground(QColor("#b7791f"))
+        elif kind == "incompatible":
+            self.window.mark_transcription_outdated()
         elif kind == "complete":
             self.status.setText({"done": "全部转录完成，SRT 保存位置见「进度 / 说明」",
                                  "partial": "部分文件转录失败，可以重试未完成的文件",
@@ -311,7 +332,9 @@ class TranscribePage(QWidget):
 
     def open_output(self):
         selected = [i.row() for i in self.table.selectionModel().selectedRows() if i.row() in self.outputs]
-        target = self.outputs[selected[0]] if selected else self.outputs[max(self.outputs)] if self.outputs else None
+        # 没有选中已完成的行时，打开最近完成的那个文件所在目录
+        row_index = selected[0] if selected else self.last_output_row
+        target = self.outputs.get(row_index)
         if target and target.parent.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.parent)))
 

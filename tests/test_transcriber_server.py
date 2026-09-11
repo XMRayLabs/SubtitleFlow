@@ -74,6 +74,16 @@ class ServerTests(unittest.TestCase):
             {"start": 300000, "end": 700000, "text": "第2段"},
         ])
 
+    def test_negative_content_length_is_rejected_without_hanging(self):
+        import http.client
+        host, port = self.server.server_address
+        conn = http.client.HTTPConnection(host, port, timeout=5)
+        conn.putrequest("POST", "/v1/jobs")
+        conn.putheader("Content-Length", "-1")
+        conn.endheaders()
+        self.assertEqual(conn.getresponse().status, 400)
+        conn.close()
+
     def test_missing_source_file_is_rejected(self):
         status, body = request(self.base, "POST", "/v1/jobs", {"path": str(Path(self.tmp.name) / "none.wav"), "segment_seconds": 300})
         self.assertEqual(status, 400)

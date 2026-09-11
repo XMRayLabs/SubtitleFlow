@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 import zipfile
 
-from .safety import atomic_write, bounded_response
+from .safety import atomic_write, bounded_response, read_json
 from .updates import open_update, verify_manifest
 
 # 当前软件版本配套的转录服务发布标签；换用新服务时随软件更新一起修改
@@ -152,7 +152,7 @@ def _layout(root: Path):
 def installed_service(root: Path) -> InstalledService | None:
     base, record = _layout(root)
     try:
-        data = json.loads(record.read_text(encoding="utf-8"))
+        data = read_json(record)
         service = InstalledService(data["version"], data["api_version"], base / _safe_relative(data["exe"]),
                                    base / _safe_relative(data["model_dir"]))
     except (OSError, ValueError, KeyError, TypeError):
@@ -242,10 +242,11 @@ class Installer:
             "exe": exe.relative_to(base).as_posix(), "model_dir": model_dir.relative_to(base).as_posix(),
         }, ensure_ascii=False).encode("utf-8"))
         shutil.rmtree(downloads, ignore_errors=True)
-        # 更新后删除旧版本的服务；模型按 revision 存放，未变化时已被校验复用
-        for old in service_dir.parent.iterdir():
-            if old != service_dir:
-                shutil.rmtree(old, ignore_errors=True)
+        # 更新后删除旧版本的服务和旧 revision 的模型；模型未变化时已被校验复用
+        for keep in (service_dir, model_dir):
+            for old in keep.parent.iterdir():
+                if old != keep:
+                    shutil.rmtree(old, ignore_errors=True)
         return installed_service(self.root)
 
     def _report(self, label):

@@ -152,6 +152,17 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(new.exe.exists())
 
 
+    def test_model_update_removes_previous_model_revision(self):
+        old = self.installer().run()
+        new_revision = "f" * 40
+        for name, data in self.model.items():
+            self.server.files[f"/hf/OpenMOSS-Team/MOSS-Transcribe-Diarize/resolve/{new_revision}/{name}"] = data
+        self.release = install.TranscriberRelease(**{**self.release.__dict__, "version": "1.1.0", "model_revision": new_revision})
+        new = self.installer().run()
+        self.assertTrue(new.model_dir.is_dir())
+        self.assertFalse(old.model_dir.exists())
+
+
 class ManifestTests(unittest.TestCase):
     def test_fetch_release_accepts_only_validly_signed_manifest(self):
         payload = json.dumps({

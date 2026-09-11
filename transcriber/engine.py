@@ -3,7 +3,7 @@ import gc
 import time
 
 MODEL_ID = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
-REVISION = "e8681d68"  # 固定住，远程代码会变
+REVISION = "e8681d68e7042738ffca8ac8212bc8fcb1131ab8"  # 固定住，远程代码会变；与发布清单中的 revision 一致
 MAX_NEW_TOKENS = 8192   # 每个转录分段的生成上限（1 分钟约 400~500 token）
 PROGRESS_INTERVAL = 1.0  # 解码已生成内容、上报进度的最短间隔（秒）
 PROMPT = ("请将音频转写为文本，每一段需以起始时间戳和说话人编号（[S01]、[S02]、[S03]…）开头，"

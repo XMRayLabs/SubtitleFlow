@@ -27,12 +27,13 @@ class Job:
     segments: int = 0
     position: float = 0.0       # 已转写到的全片时间（秒）
     duration: float = 0.0
+    forced: int = 0             # 切点附近没有静音、在目标位置强制切开的次数
     error: str = ""
     cues: list[Cue] = field(default_factory=list)
     cancel: threading.Event = field(default_factory=threading.Event)
 
     def snapshot(self):
-        return {"id": self.id, "status": self.status, "segment": self.segment, "segments": self.segments,
+        return {"id": self.id, "status": self.status, "segment": self.segment, "segments": self.segments, "forced": self.forced,
                 "position": round(self.position, 2), "duration": round(self.duration, 3), "error": self.error}
 
 
@@ -104,6 +105,7 @@ class TranscriptionService:
             audio, job.duration, silences = self.media.probe(job.path)
             plan = plan_segments(job.duration, silences, job.segment_seconds)
             job.segments = len(plan)
+            job.forced = sum(segment.forced for segment in plan)
             if not self.engine.loaded:
                 job.status = "loading"
                 self.engine.load()

@@ -46,6 +46,10 @@ class FinalizeCuesTests(unittest.TestCase):
         cues = [Cue(900, 2000, "b"), Cue(0, 1000, "a")]
         self.assertEqual(finalize_cues(cues), [Cue(0, 900, "a"), Cue(900, 2000, "b")])
 
+    def test_cues_starting_together_are_merged_so_nothing_overlaps(self):
+        cues = [Cue(0, 2000, "甲说"), Cue(0, 1500, "乙说"), Cue(2500, 3000, "c")]
+        self.assertEqual(finalize_cues(cues), [Cue(0, 2000, "甲说\n乙说"), Cue(2500, 3000, "c")])
+
     def test_zero_length_cue_gets_minimum_duration(self):
         self.assertEqual(finalize_cues([Cue(3000, 3000, "x")]), [Cue(3000, 3300, "x")])
 

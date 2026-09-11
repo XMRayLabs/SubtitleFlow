@@ -89,6 +89,22 @@ class TranscribeJobTests(unittest.TestCase):
         self.assertEqual(status, "done")
 
 
+    def test_forced_cuts_are_reported_as_a_warning(self):
+        source = self.source("no-silence.wav", duration=700)
+        status, events = self.run_job([source])
+        self.assertEqual(status, "done")
+        self.assertTrue(any(e[0] == "warning" and e[1] == 0 and "1 处" in e[2] for e in events), events)
+
+    def test_incompatible_service_version_asks_for_update(self):
+        hello = 'print(\'{"port": 1, "token": "t", "api_version": 99}\', flush=True)'
+        self.service = ServiceManager([sys.executable, "-c", hello])
+        self.addCleanup(self.service.stop)
+        status, events = self.run_job([self.source("a.wav", duration=60)])
+        self.assertEqual(status, "partial")
+        self.assertIn(("incompatible",), events)
+        self.assertTrue(any(e[:3] == ("file", 0, "失败") and "更新转录服务" in e[3] for e in events))
+
+
 class SaveSrtTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

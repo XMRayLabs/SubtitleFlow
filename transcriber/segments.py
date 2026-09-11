@@ -64,8 +64,14 @@ def latest_timestamp(raw: str) -> float | None:
 
 
 def finalize_cues(cues: list[Cue]) -> list[Cue]:
-    """按开始时间排序；零长度补足最短时长；与下一条重叠时截到下一条开头。"""
-    ordered = sorted(cues, key=lambda c: c.start)
+    """按开始时间排序；同时开始的条目（多人同时说话）合并为一条多行字幕；
+    零长度补足最短时长；与下一条重叠时截到下一条开头。结果互不重叠。"""
+    ordered = []
+    for cue in sorted(cues, key=lambda c: c.start):
+        if ordered and ordered[-1].start == cue.start:
+            previous = ordered.pop()
+            cue = Cue(cue.start, max(previous.end, cue.end), f"{previous.text}\n{cue.text}")
+        ordered.append(cue)
     result = []
     for i, cue in enumerate(ordered):
         end = cue.end if cue.end > cue.start else cue.start + MIN_CUE_MS

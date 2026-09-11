@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import threading
 
-from PySide6.QtCore import QStandardPaths, QTimer, QUrl
+from PySide6.QtCore import QStandardPaths, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QFileDialog, QTableWidgetItem, QMessageBox,
@@ -35,8 +35,12 @@ def native_keyring():
 
 
 class Window(QMainWindow):
+    # 后台线程发现转录服务接口版本不兼容时发出，由界面线程切换到"更新转录服务"
+    service_incompatible = Signal()
+
     def __init__(self, load_preferences=True):
         super().__init__()
+        self.service_incompatible.connect(self.mark_transcription_outdated)
         self.paths, self.last_root = [], None
         self.workers = []
         self.job_worker = None
@@ -78,6 +82,14 @@ class Window(QMainWindow):
         self.uninstall_action.setVisible(installed is not None)
         self.transcribe_page.refresh_state(update_status=True)
 
+    def mark_transcription_outdated(self):
+        """连上服务后发现接口版本不兼容：停用当前服务，转录页改为提示更新转录服务。"""
+        if self.transcription_service:
+            self.transcription_service.stop()
+        self.transcription_service = None
+        self.transcription_outdated = True
+        self.transcribe_page.refresh_state(update_status=True)
+
     def uninstall_transcriber(self):
         from .transcriber_install import uninstall
         if self.transcribe_page.busy():
@@ -101,11 +113,13 @@ class Window(QMainWindow):
         service = self.transcription_service
         if service is None:
             return
-        from .transcription import ServiceError
+        from .transcription import IncompatibleService, ServiceError
 
         def start():
             try:
                 service.ensure()
+            except IncompatibleService:
+                self.service_incompatible.emit()
             except ServiceError:
                 pass
 

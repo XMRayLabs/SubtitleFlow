@@ -36,9 +36,13 @@ def create_server(service, token: str, host="127.0.0.1", port=0) -> Server:
             return False
 
         def body(self):
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > MAX_BODY:
-                raise ValueError("请求过大")
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                raise ValueError("请求长度无效")
+            # 负数长度会让 rfile.read 一直读到连接关闭，未经鉴权就能占住处理线程
+            if not 0 <= length <= MAX_BODY:
+                raise ValueError("请求长度无效或过大")
             data = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(data, dict):
                 raise ValueError("请求格式错误")
