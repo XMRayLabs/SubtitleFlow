@@ -3,7 +3,7 @@ from pathlib import Path
 import threading
 import time
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QUrl, QTimer
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QSpinBox, QProgressBar, QFileDialog, QTableWidgetItem
 
@@ -340,6 +340,11 @@ class TranscribePage(QWidget):
 
     def job_finished(self):
         # finished 信号发出时线程可能还没完全退出；先等它结束，再释放 QThread 对象
+        QTimer.singleShot(0, self._complete_job)
+
+    def _complete_job(self):
+        if self.worker is None:
+            return
         self.worker.wait()
         self.window.workers.remove(self.worker)
         self.worker = None
