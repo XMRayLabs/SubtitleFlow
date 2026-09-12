@@ -53,6 +53,9 @@ def create_server(service, token: str, host="127.0.0.1", port=0) -> Server:
                 return
             if self.path == "/v1/health":
                 return self.reply(200, {"api_version": API_VERSION, **service.health()})
+            if self.path == "/v1/engines":
+                # 客户端据此渲染可选项，不必内置各引擎的知识；新增引擎无需改动协议
+                return self.reply(200, {"engines": [info.as_dict() for info in service.engines()]})
             match = JOB_PATH.match(self.path)
             job = service.get(match.group(1)) if match and match.group(2) != "/cancel" else None
             if not job:
@@ -73,7 +76,9 @@ def create_server(service, token: str, host="127.0.0.1", port=0) -> Server:
                 return
             try:
                 if self.path == "/v1/jobs":
-                    job = service.submit(data.get("path"), data.get("segment_seconds"))
+                    # engine / model / language 可省略，省略时用引擎默认值；给了无效值一律 400，不静默忽略
+                    job = service.submit(data.get("path"), data.get("segment_seconds"),
+                                         data.get("engine"), data.get("model"), data.get("language"))
                     return self.reply(201, job.snapshot())
             except ValueError as exc:
                 return self.reply(400, {"error": str(exc)})

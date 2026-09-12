@@ -2,6 +2,9 @@
 import gc
 import time
 
+from .engines import EngineInfo
+from .segments import latest_timestamp, parse_output
+
 MODEL_ID = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
 REVISION = "e8681d68e7042738ffca8ac8212bc8fcb1131ab8"  # 固定住，远程代码会变；与发布清单中的 revision 一致
 MAX_NEW_TOKENS = 8192   # 每个转录分段的生成上限（1 分钟约 400~500 token）
@@ -14,6 +17,12 @@ class MossEngine:
     def __init__(self, model=MODEL_ID, revision=REVISION):
         self.model_source, self.revision = model, revision
         self.model = self.processor = self.prompt = None
+
+    @classmethod
+    def info(cls) -> EngineInfo:
+        # 模型固定、语言由模型自行判断，因此两项都只有一个取值
+        return EngineInfo(name="moss", models=(MODEL_ID,), default_model=MODEL_ID,
+                          languages=("auto",), diarization=True)
 
     @property
     def loaded(self):
@@ -38,8 +47,12 @@ class MossEngine:
         import torch
         torch.cuda.empty_cache()
 
-    def transcribe(self, audio, on_text, should_stop):
-        """返回模型原始输出；should_stop() 为真时在下一步生成处停止（结果作废，由调用方丢弃）。"""
+    def transcribe(self, audio, on_progress, should_stop):
+        """返回本分段的字幕，时间相对分段开头（平移由服务层做）。
+
+        on_progress(秒) 上报已转写到分段内第几秒；should_stop() 为真时在下一步生成处停止
+        （结果作废，由调用方丢弃）。
+        """
         import torch
         from transformers import StoppingCriteria, StoppingCriteriaList
         from transformers.generation.streamers import BaseStreamer
@@ -61,7 +74,10 @@ class MossEngine:
                 self.ids.extend(value.reshape(-1).tolist())
                 if time.time() - self.last >= PROGRESS_INTERVAL:
                     self.last = time.time()
-                    on_text(tokenizer.decode(self.ids, skip_special_tokens=True))
+                    # 进度来自已生成内容里的最后一个时间戳，是 MOSS 输出格式的细节，不外泄给服务层
+                    stamp = latest_timestamp(tokenizer.decode(self.ids, skip_special_tokens=True))
+                    if stamp is not None:
+                        on_progress(stamp)
 
             def end(self):
                 pass
@@ -77,4 +93,5 @@ class MossEngine:
         finally:
             del inputs
             torch.cuda.empty_cache()
-        return self.processor.batch_decode(out[:, prompt_length:], skip_special_tokens=True)[0]
+        raw = self.processor.batch_decode(out[:, prompt_length:], skip_special_tokens=True)[0]
+        return parse_output(raw, 0.0)

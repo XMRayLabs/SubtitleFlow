@@ -57,6 +57,15 @@ def parse_output(raw: str, offset_sec: float) -> list[Cue]:
     return cues
 
 
+def shift_cues(cues: list[Cue], offset_sec: float) -> list[Cue]:
+    """把分段内的字幕（时间相对分段开头）平移成全片时间。
+
+    引擎只管转写交给它的那段音频，分段在整片中的位置由服务层负责。
+    """
+    offset_ms = round(offset_sec * 1000)
+    return [Cue(cue.start + offset_ms, cue.end + offset_ms, cue.text) for cue in cues]
+
+
 def latest_timestamp(raw: str) -> float | None:
     """模型已输出的最后一个时间戳（相对分段开头，秒），用于估算转写进度。"""
     stamps = TIMESTAMP_RE.findall(raw)

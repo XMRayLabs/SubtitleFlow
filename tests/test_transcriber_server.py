@@ -84,6 +84,33 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(conn.getresponse().status, 400)
         conn.close()
 
+    def test_engines_endpoint_reports_what_this_service_can_actually_run(self):
+        status, body = request(self.base, "GET", "/v1/engines")
+        self.assertEqual(status, 200)
+        self.assertEqual([e["name"] for e in body["engines"]], ["fake"])
+        engine = body["engines"][0]
+        self.assertEqual((engine["default_model"], engine["diarization"]), ("fake", False))
+        self.assertIn("auto", engine["languages"])
+
+    def test_job_records_the_engine_options_it_ran_with(self):
+        source = self.media(duration=60)
+        _, body = request(self.base, "POST", "/v1/jobs",
+                          {"path": source, "segment_seconds": 300, "engine": "fake", "language": "zh"})
+        self.assertEqual((body["engine"], body["model"], body["language"]), ("fake", "fake", "zh"))
+        # 省略时回落到引擎默认值
+        _, body = request(self.base, "POST", "/v1/jobs", {"path": source, "segment_seconds": 300})
+        self.assertEqual((body["engine"], body["model"], body["language"]), ("fake", "fake", "auto"))
+
+    def test_unavailable_engine_options_are_rejected_instead_of_silently_ignored(self):
+        source = self.media(duration=60)
+        for extra, expected in (({"engine": "whisper"}, "未提供引擎"),
+                                ({"model": "large-v3"}, "没有模型"),
+                                ({"language": "de"}, "不支持语言")):
+            status, body = request(self.base, "POST", "/v1/jobs",
+                                   {"path": source, "segment_seconds": 300, **extra})
+            self.assertEqual(status, 400, extra)
+            self.assertIn(expected, body["error"])
+
     def test_missing_source_file_is_rejected(self):
         status, body = request(self.base, "POST", "/v1/jobs", {"path": str(Path(self.tmp.name) / "none.wav"), "segment_seconds": 300})
         self.assertEqual(status, 400)

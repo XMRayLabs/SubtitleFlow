@@ -8,6 +8,9 @@ import json
 from pathlib import Path
 import time
 
+from .engines import EngineInfo
+from .segments import Cue
+
 
 class FakeMedia:
     def probe(self, path):
@@ -27,20 +30,25 @@ class FakeEngine:
     def __init__(self):
         self.loaded = False
 
+    @classmethod
+    def info(cls) -> EngineInfo:
+        return EngineInfo(name="fake", models=("fake",), default_model="fake",
+                          languages=("auto", "zh", "en"), diarization=False)
+
     def load(self):
         self.loaded = True
 
     def unload(self):
         self.loaded = False
 
-    def transcribe(self, clip, on_text, should_stop):
+    def transcribe(self, clip, on_progress, should_stop):
         if clip.get("fail"):
             raise RuntimeError(clip["fail"])
         deadline = time.time() + clip.get("delay", 0)
         while time.time() < deadline:
             if should_stop():
-                return ""
+                return []
             time.sleep(0.01)
-        raw = f"[0.00][S01] 第{clip['index']}段[{clip['length']:.2f}]"
-        on_text(raw)
-        return raw
+        length = clip["length"]
+        on_progress(length)
+        return [Cue(0, round(length * 1000), f"第{clip['index']}段")]

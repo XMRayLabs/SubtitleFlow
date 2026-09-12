@@ -1,6 +1,6 @@
 import unittest
 
-from transcriber.segments import Cue, Segment, finalize_cues, parse_output, plan_segments
+from transcriber.segments import Cue, Segment, finalize_cues, parse_output, plan_segments, shift_cues
 
 
 class PlanSegmentsTests(unittest.TestCase):
@@ -39,6 +39,17 @@ class ParseOutputTests(unittest.TestCase):
     def test_ignores_malformed_and_empty_entries(self):
         raw = "noise [1.00][S01]   [2.00][3.00][S01] ok[4.00][5.00][S01] truncated"
         self.assertEqual(parse_output(raw, 0), [Cue(3000, 4000, "ok")])
+
+
+class ShiftCuesTests(unittest.TestCase):
+    def test_segment_relative_cues_become_whole_file_time(self):
+        cues = [Cue(0, 1500, "第一句"), Cue(2000, 3000, "第二句")]
+        self.assertEqual(shift_cues(cues, 300.0),
+                         [Cue(300000, 301500, "第一句"), Cue(302000, 303000, "第二句")])
+
+    def test_first_segment_is_unchanged_and_empty_result_stays_empty(self):
+        self.assertEqual(shift_cues([Cue(0, 1000, "x")], 0.0), [Cue(0, 1000, "x")])
+        self.assertEqual(shift_cues([], 12.5), [])
 
 
 class FinalizeCuesTests(unittest.TestCase):
