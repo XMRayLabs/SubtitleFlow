@@ -88,8 +88,10 @@ class MossEngine:
             with torch.inference_mode():
                 out = self.model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False, streamer=Progress(),
                                           stopping_criteria=StoppingCriteriaList([Stop()]))
-        except torch.OutOfMemoryError:
-            raise RuntimeError("显存不足，请调短分段时长后重试")
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower():
+                raise
+            raise RuntimeError("显存不足，请调短分段时长后重试") from exc
         finally:
             del inputs
             torch.cuda.empty_cache()

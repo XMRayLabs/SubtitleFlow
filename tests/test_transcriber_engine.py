@@ -89,6 +89,24 @@ class MossEngineContractTests(unittest.TestCase):
         cues, _ = self.run_transcribe(["模型没有按格式输出"], [[0]])
         self.assertEqual(cues, [])
 
+    def failing_transcribe(self, error):
+        engine = self.engine(["[0.00][S01] 你好[2.50]"], [[0]])
+        engine.model.generate = lambda **kwargs: (_ for _ in ()).throw(error)
+        with patch("torch.cuda.empty_cache"):
+            with self.assertRaises(RuntimeError) as caught:
+                engine.transcribe(object(), lambda seconds: None, lambda: False)
+        return caught.exception
+
+    def test_out_of_memory_is_explained_whatever_torch_calls_it(self):
+        # 各 torch 版本的 OOM 例外类型不同，但都是 RuntimeError 的子类、消息都含 out of memory
+        for error in (RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB"),
+                      getattr(torch, "OutOfMemoryError", RuntimeError)("CUDA out of memory")):
+            with self.subTest(type(error).__name__):
+                self.assertIn("显存不足", str(self.failing_transcribe(error)))
+
+    def test_other_runtime_errors_keep_their_own_message(self):
+        self.assertIn("cuDNN", str(self.failing_transcribe(RuntimeError("cuDNN error"))))
+
 
 if __name__ == "__main__":
     unittest.main()
