@@ -15,6 +15,14 @@ ffmpeg_dir = os.environ.get('SUBTITLEFLOW_FFMPEG_DIR')
 if ffmpeg_dir:
     # LGPL ffmpeg build, placed next to the service executable (see transcriber/__main__.py).
     binaries.append((os.path.join(ffmpeg_dir, 'ffmpeg.exe'), '.'))
+    # LGPL requires shipping the licence text with the binary. It sits beside bin/ in the official archive.
+    for candidate in (os.path.join(ffmpeg_dir, 'LICENSE.txt'),
+                      os.path.join(os.path.dirname(ffmpeg_dir), 'LICENSE.txt')):
+        if os.path.isfile(candidate):
+            datas.append((candidate, 'legal'))
+            break
+    else:
+        raise SystemExit('ffmpeg LICENSE.txt not found next to ffmpeg.exe; refusing to build without it')
 hidden = collect_submodules('transformers.models.qwen3') + collect_submodules('transformers.models.whisper')
 hidden += ['transcriber.engine', 'transcriber.media', 'transcriber.fakes']
 a = Analysis(['run_transcriber.py'], pathex=[], binaries=binaries, datas=datas, hiddenimports=hidden,
