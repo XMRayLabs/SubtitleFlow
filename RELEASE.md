@@ -53,7 +53,7 @@ main 推送自动构建三平台完整应用 ZIP 并上传 Actions artifacts；�
 2. 工作流构建 PyInstaller onedir 服务包，用假模型验证可独立启动，下载固定 revision 的模型计算逐文件哈希（模型不上传），压缩后按 1900 MiB 分卷，并创建 Release 草稿。
 3. 从草稿或工作流产物取下 `transcriber-payload.json`（分卷与模型的哈希只有构建机算得出来，工作流没有密钥时会保留它），在持有密钥的机器上签署并上传 `transcriber.json`：`python tools/transcriber_release.py --sign-payload transcriber-payload.json --output release-assets --use-local-key`。签名前应下载分卷复算 SHA-256，与 payload 中的 `parts` 逐一比对。发布前删除草稿中的 `transcriber-payload.json`，它只是签名用的中间文件。
    本机完整构建时才用打包形式：`python tools/transcriber_release.py --use-local-key --version X.Y.Z --dist <onedir> --model-dir <模型目录> --model-revision <完整提交哈希> --output release-assets`。注意 PyInstaller 产物无法跨机器逐字节复现，因此不能用本机构建去为工作流产出的分卷签名。
-4. 发布时**不得**将转录服务 Release 设为 latest：主程序的更新检查读取 releases/latest，只能看到主程序版本。
+4. 发布时**不得**将转录服务 Release 设为 latest：主程序的更新检查读取 releases/latest，只能看到主程序版本。注意网页发布草稿时「Set as the latest release」默认是勾选的，会覆盖工作流建草稿时的 `--latest=false`；1.0.0 发布时就发生过。发布后务必核对 `curl -s https://api.github.com/repos/<owner>/<repo>/releases/latest`（该接口有缓存，必要时加随机查询参数），指向应为主程序版本；若被覆盖，用 `gh release edit v<主程序版本> --latest` 恢复。
 5. 主程序在 `subtitleflow/transcriber_install.py` 的 `TRANSCRIBER_TAG` 固定配套的服务标签。服务接口不兼容时递增 `transcriber.API_VERSION` 与主程序的 `TRANSCRIBER_API_VERSION`，并随新主程序修改 `TRANSCRIBER_TAG`；接口兼容时主程序升级不要求重新下载服务。
 
 ## 0.1.3 安全发布变更
