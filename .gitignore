@@ -17,3 +17,7 @@ AGENTS.md
 CONTEXT.md
 docs/adr/
 docs/agents/
+# Local scratch scripts and sample media
+scripts/*
+.secrets
+.scerets

@@ -20,7 +20,7 @@ from .safety import atomic_write, bounded_response, read_json
 from .updates import open_update, verify_manifest
 
 # 当前软件版本配套的转录服务发布标签；换用新服务时随软件更新一起修改
-TRANSCRIBER_TAG = "transcriber-v1.0.0"
+TRANSCRIBER_TAG = "transcriber-v1.0.1"
 MODEL_ENDPOINTS = ["https://huggingface.co", "https://hf-mirror.com"]
 KIND = "subtitleflow-transcriber"
 PLATFORM = "windows-x86_64"
