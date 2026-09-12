@@ -1,5 +1,5 @@
 """SRT parsing without third-party code or output license text."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 
@@ -63,6 +63,12 @@ def read(path: Path) -> list[Cue]:
         except ValueError as exc:
             raise ValueError(f"{path.name}: {exc}") from exc
     raise ValueError(f"{path.name}: 无法识别编码，请转换为 UTF-8")
+
+
+def numbered(cues: list[Cue]) -> list[Cue]:
+    """把顺序编号加到正文开头，条目编号一并改成同一个数：出问题的字幕好按画面上的编号回查。
+    原字幕的编号可能重复或不连续，所以用顺序号，不用原有的 id。"""
+    return [replace(cue, id=index, text=f"{index} {cue.text}") for index, cue in enumerate(cues, 1)]
 
 
 def stamp(ms: int) -> str:

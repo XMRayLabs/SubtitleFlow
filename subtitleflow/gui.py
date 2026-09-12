@@ -178,6 +178,7 @@ class Window(QMainWindow):
         if not merging:
             self.advanced.hide()
         self.export_xml.setVisible(mode != "fcpxml")
+        self.number_translated.setVisible(mode in ("translate", "both"))
         xml = mode == "fcpxml" or self.export_xml.isChecked()
         self.fps.setVisible(xml)
         self.fps_label.setVisible(xml)
@@ -245,7 +246,8 @@ class Window(QMainWindow):
         return JobOptions(self.mode.currentData(),
                           MergeOptions(self.target.value(), self.silence.value(), self.tolerance.value()),
                           self.batch.value(), self.ai.isChecked() and self.mode.currentData() not in ("translate", "fcpxml"),
-                          self.export_xml.isChecked(), self.fps.currentText())
+                          self.export_xml.isChecked(), self.fps.currentText(),
+                          self.number_translated.isChecked() and self.mode.currentData() in ("translate", "both"))
 
     def save_settings(self):
         data = {"base": self.base.text(), "model": self.model.currentText(), "output": self.output.text(),
@@ -298,6 +300,7 @@ class Window(QMainWindow):
         self.ai.setChecked(data.get("ai", False))
         self.export_xml.setChecked(data.get("export_fcpxml", False))
         self.fps.setCurrentText(data.get("fps", "25"))
+        self.number_translated.setChecked(data.get("number_translated", False))
 
     def start(self, resume=None):
         if self.busy():

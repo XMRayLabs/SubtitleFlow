@@ -193,6 +193,19 @@ class JobTests(unittest.TestCase):
             self.assertTrue((output / "合并后的srt/a.srt").exists())
             self.assertFalse((output / "originals").exists())
 
+    def test_numbering_only_reaches_the_translated_srt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "a.srt"
+            path.write_text(render([cue(0, 1, "One.", 7), cue(1, 2, "Two.", 7)]), encoding="utf-8")
+            options = JobOptions(mode="translate", number_translated=True, export_fcpxml=True)
+            with patch("subtitleflow.jobs.Client", FakeClient):
+                output = Job([path], root / "out", options, APIConfig("https://example.test/v1", "secret", "test"),
+                             threading.Event()).run()
+            translated = read(output / "翻译后的srt/a.srt")
+            self.assertEqual([(c.id, c.text) for c in translated], [(1, "1 中文译文"), (2, "2 中文译文")])
+            self.assertNotIn("1 中文译文", (output / "转换后的fcpxml/a.fcpxml").read_text(encoding="utf-8"))
+
     def test_merge_without_api(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "a.srt"

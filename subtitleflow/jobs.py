@@ -21,6 +21,7 @@ class JobOptions:
     ai: bool = False
     export_fcpxml: bool = False
     fps: str = "25"
+    number_translated: bool = False   # 在翻译后的字幕正文开头加顺序编号，只影响翻译后的 SRT
 
 
 class Job:
@@ -48,6 +49,7 @@ class Job:
             report = read_json(self.root / "report.json")
             report["settings"]["options"].setdefault("export_fcpxml", False)
             report["settings"]["options"].setdefault("fps", "25")
+            report["settings"]["options"].setdefault("number_translated", False)
             if report["settings"] != settings:
                 raise ValueError("恢复任务的参数或模型已改变，请新建任务")
         else:
@@ -126,7 +128,9 @@ class Job:
                                      self.root / ".progress" / (item["name"] + ".json"),
                                      lambda done, total: self.event("file", index, "翻译中", f"{done}/{total}"))
                     client.check()
-                    srt.write(self.root / "翻译后的srt" / item["name"], cues)
+                    # 编号只写进翻译后的 SRT：FCPXML 标题里不该出现它
+                    srt.write(self.root / "翻译后的srt" / item["name"],
+                              srt.numbered(cues) if self.options.number_translated else cues)
                 if self.options.export_fcpxml or self.options.mode == "fcpxml":
                     client.check()
                     fcpxml.write(self.root / "转换后的fcpxml" / (Path(item["name"]).stem + ".fcpxml"), cues, fcpxml.ExportOptions(fps=self.options.fps))
