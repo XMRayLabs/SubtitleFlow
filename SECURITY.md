@@ -11,11 +11,13 @@
 
 ## 更新签名
 
-安装包内置 release-v1 公钥，私钥仅保存在发布者系统凭据库 SubtitleFlow-release / ed25519-v1。不要将私钥写入仓库、日志或 issue。工具 tools/provision_update_key.py 可在首次设置时创建系统凭据与公钥文件；已有发布用户时不可随意更换公钥。
+安装包内置 release-v2 公钥，私钥仅保存在发布者系统凭据库 SubtitleFlow-release / ed25519-v2。不要将私钥写入仓库、日志或 issue。工具 tools/provision_update_key.py 可在首次设置时创建系统凭据与公钥文件；已有发布用户时不可随意更换公钥。key_id 与凭据账户定义在 tools/signing.py 顶部，轮换时只改那里。
+
+0.2.0 轮换记录：release-v1 私钥已不可用，改用 release-v2。客户端只信任自己安装包内嵌的公钥，因此 0.1.6 及更早版本无法验证新清单——它们不会提示有新版本，只会在状态栏显示「后台更新检查未成功」。这些用户必须通过应用外的渠道通知其手动重新安装。轮换会造成这种断裂，非必要不得重复。
 
 默认采用本机签名：下载并核验 CI 安装包及 asset.json 后运行 tools/make_update_manifest.py --use-local-key。CI 未配置私钥时只生成安装包草稿，不生成 unsigned update.json。必须把合法签名清单加入发布草稿再发布。
 
-若启用 CI 签名，需要单独保护签名作业：配置 SUBTITLEFLOW_UPDATE_SIGNING_KEY Secret（32 字节种子十六进制）与 SUBTITLEFLOW_UPDATE_KEY_ID=release-v1，并使用审批环境、保护分支/标签。拥有源码和 CI 修改权仍可能获取 CI 密钥，因此本机独立签名为默认方案。
+若启用 CI 签名，需要单独保护签名作业：配置 SUBTITLEFLOW_UPDATE_SIGNING_KEY Secret（32 字节种子十六进制）与 SUBTITLEFLOW_UPDATE_KEY_ID=release-v2，并使用审批环境、保护分支/标签。拥有源码和 CI 修改权仍可能获取 CI 密钥，因此本机独立签名为默认方案。
 
 这不是 Windows Authenticode 或 Apple Developer ID 签名。平台签名、公证需要相应证书，当前未配置。没有有效签名清单时客户端会阻止自动更新。
 
