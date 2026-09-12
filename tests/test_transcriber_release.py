@@ -63,6 +63,28 @@ class TranscriberReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 updates.verify_manifest(json.dumps(envelope))
 
+    def test_unsigned_payload_is_kept_for_offline_signing_and_never_left_beside_a_signed_manifest(self):
+        out = self.dir / "out"
+        with patch.object(transcriber_release, "signing_key", return_value=(None, None)):
+            transcriber_release.write_manifest(b'{"kind":"test"}', out, use_local_key=False)
+        unsigned = out / transcriber_release.PAYLOAD_NAME
+        # 构建机没有密钥，但哈希只有它算得出来，所以保留 payload 供离线签名
+        self.assertEqual(unsigned.read_bytes(), b'{"kind":"test"}')
+        self.assertFalse((out / "transcriber.json").exists())
+
+        key = SigningKey.generate()
+        with patch.dict(update_trust.TRUSTED_UPDATE_KEYS, {"test": key.verify_key.encode().hex()}), \
+                patch.object(transcriber_release, "signing_key", return_value=("test", key.encode().hex())):
+            transcriber_release.main(["--sign-payload", str(unsigned), "--output", str(out), "--use-local-key"])
+            signed = json.loads((out / "transcriber.json").read_text(encoding="utf-8"))
+            self.assertEqual(updates.verify_manifest(json.dumps(signed)), {"kind": "test"})
+        # 签好之后未签名副本必须消失，避免误当成清单上传
+        self.assertFalse(unsigned.exists())
+
+    def test_packaging_arguments_are_only_required_when_not_signing_an_existing_payload(self):
+        with self.assertRaises(SystemExit):
+            transcriber_release.main(["--output", str(self.dir / "out")])
+
 
 if __name__ == "__main__":
     unittest.main()

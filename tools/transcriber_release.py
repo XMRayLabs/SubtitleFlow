@@ -7,6 +7,12 @@ trust_remote_code, so it must be pinned by hash as well as by revision).
 
     python tools/transcriber_release.py --version 1.0.0 --dist dist/SubtitleFlow-Transcriber \
         --model-dir <snapshot dir> --output dist/transcriber-release [--use-local-key]
+
+Without a key the payload is kept as transcriber-payload.json instead of being discarded, so the
+release can be packaged on the build machine and signed later where the key lives:
+
+    python tools/transcriber_release.py --sign-payload transcriber-payload.json \
+        --output release-assets --use-local-key
 """
 import argparse
 import hashlib
@@ -20,11 +26,12 @@ from signing import sign, signing_key  # noqa: E402
 from transcriber import API_VERSION  # noqa: E402
 
 PART_SIZE = 1900 * 1024 * 1024   # safely below GitHub's 2 GiB asset limit
+PAYLOAD_NAME = "transcriber-payload.json"   # unsigned manifest body, kept for offline signing
 MODEL_REPO = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
 PLATFORM = "windows-x86_64"
 KIND = "subtitleflow-transcriber"
 
-__all__ = ["archive", "split", "payload", "sign", "main"]
+__all__ = ["archive", "split", "payload", "sign", "write_manifest", "main"]
 
 
 def file_digest(path: Path):
@@ -80,32 +87,54 @@ def payload(version, parts, entry, model_repo, model_revision, model_dir) -> byt
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Package the transcription service release")
-    parser.add_argument("--version", required=True)
-    parser.add_argument("--dist", type=Path, required=True, help="PyInstaller onedir output folder")
-    parser.add_argument("--model-dir", type=Path, required=True, help="model snapshot folder at the pinned revision")
-    parser.add_argument("--model-revision", required=True, help="full 40-character commit hash of the model")
+    parser.add_argument("--version")
+    parser.add_argument("--dist", type=Path, help="PyInstaller onedir output folder")
+    parser.add_argument("--model-dir", type=Path, help="model snapshot folder at the pinned revision")
+    parser.add_argument("--model-revision", help="full 40-character commit hash of the model")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--part-size", type=int, default=PART_SIZE)
     parser.add_argument("--use-local-key", action="store_true")
+    parser.add_argument("--sign-payload", type=Path,
+                        help=f"sign an existing {PAYLOAD_NAME} from the build machine; needs no build or model")
     args = parser.parse_args(argv)
-    if len(args.model_revision) != 40:
-        parser.error("--model-revision must be the full commit hash")
+    if not args.sign_payload:
+        missing = [name for name in ("version", "dist", "model_dir", "model_revision") if getattr(args, name) is None]
+        if missing:
+            parser.error("--" + ", --".join(name.replace("_", "-") for name in missing) + " required when packaging")
+        if len(args.model_revision) != 40:
+            parser.error("--model-revision must be the full commit hash")
     args.output.mkdir(parents=True, exist_ok=True)
+    if args.sign_payload:
+        return write_manifest(args.sign_payload.read_bytes(), args.output, args.use_local_key)
     name = f"SubtitleFlow-Transcriber-{args.version}-{PLATFORM}.zip"
     bundle = archive(args.dist, args.output / name)
     parts = split(bundle, args.output, args.part_size)
     bundle.unlink()
     exe = next(p for p in args.dist.iterdir() if p.suffix.lower() == ".exe")
     data = payload(args.version, parts, f"{args.dist.name}/{exe.name}", MODEL_REPO, args.model_revision, args.model_dir)
-    key_id, seed = signing_key(args.use_local_key)
-    manifest = args.output / "transcriber.json"
-    if not seed or not key_id:
-        # Parts stay usable for testing, but an unsigned manifest is never produced.
-        manifest.unlink(missing_ok=True)
-        print("Signing key not configured; transcriber.json intentionally omitted")
-    else:
-        manifest.write_text(json.dumps(sign(data, key_id, seed), indent=2), encoding="utf-8")
+    write_manifest(data, args.output, args.use_local_key)
     print("\n".join(f"{p.name}  {p.stat().st_size}" for p in parts))
+
+
+def write_manifest(data: bytes, output: Path, use_local_key: bool):
+    """Sign the payload into transcriber.json, or keep it unsigned for offline signing.
+
+    The hashes can only be computed where the parts and the model live, which is the build machine.
+    Discarding them when no key is configured would force whoever holds the key to reproduce a
+    byte-identical build, so the unsigned payload is kept for `--sign-payload` instead.
+    """
+    output.mkdir(parents=True, exist_ok=True)
+    key_id, seed = signing_key(use_local_key)
+    manifest, unsigned = output / "transcriber.json", output / PAYLOAD_NAME
+    if not seed or not key_id:
+        # An unsigned manifest is never produced; the payload alone is inert without a signature.
+        manifest.unlink(missing_ok=True)
+        unsigned.write_bytes(data)
+        print(f"Signing key not configured; wrote {PAYLOAD_NAME} to sign offline with --sign-payload")
+        return
+    manifest.write_text(json.dumps(sign(data, key_id, seed), indent=2), encoding="utf-8")
+    unsigned.unlink(missing_ok=True)
+    print(f"Signed transcriber.json with {key_id}")
 
 
 if __name__ == "__main__":
