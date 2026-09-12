@@ -81,6 +81,58 @@ class TranscriberReleaseTests(unittest.TestCase):
         # 签好之后未签名副本必须消失，避免误当成清单上传
         self.assertFalse(unsigned.exists())
 
+    def payload_for(self, parts_dir):
+        parts = [parts_dir / "s.zip.001", parts_dir / "s.zip.002"]
+        parts[0].write_bytes(b"first")
+        parts[1].write_bytes(b"second")
+        model = self.dir / "model"
+        model.mkdir(exist_ok=True)
+        (model / "config.json").write_text("{}", encoding="utf-8")
+        return transcriber_release.payload("1.0.0", parts, "S/S.exe", "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+                                           "e8681d68e7042738ffca8ac8212bc8fcb1131ab8", model)
+
+    def test_signing_job_rehashes_parts_before_vouching_for_them(self):
+        parts_dir = self.dir / "assets"
+        parts_dir.mkdir()
+        payload = self.payload_for(parts_dir)
+        transcriber_release.verify_parts(payload, parts_dir)
+        # 构建作业之后被替换或截断的分卷，签名作业必须拒签
+        (parts_dir / "s.zip.002").write_bytes(b"swapped")
+        with self.assertRaises(ValueError):
+            transcriber_release.verify_parts(payload, parts_dir)
+        (parts_dir / "s.zip.002").unlink()
+        with self.assertRaises(ValueError):
+            transcriber_release.verify_parts(payload, parts_dir)
+
+    def test_mismatched_parts_leave_the_payload_unsigned(self):
+        parts_dir = self.dir / "assets"
+        parts_dir.mkdir()
+        unsigned = parts_dir / transcriber_release.PAYLOAD_NAME
+        unsigned.write_bytes(self.payload_for(parts_dir))
+        (parts_dir / "s.zip.001").write_bytes(b"tampered")
+        key = SigningKey.generate()
+        with patch.object(transcriber_release, "signing_key", return_value=("test", key.encode().hex())), \
+                self.assertRaises(ValueError):
+            transcriber_release.main(["--sign-payload", str(unsigned), "--parts-dir", str(parts_dir),
+                                      "--output", str(parts_dir), "--require-key"])
+        self.assertFalse((parts_dir / "transcriber.json").exists())
+        self.assertTrue(unsigned.exists())
+
+    def test_signing_job_fails_without_a_key_instead_of_handing_back_a_payload(self):
+        out = self.dir / "out"
+        with patch.object(transcriber_release, "signing_key", return_value=("release-v2", None)), \
+                self.assertRaises(ValueError):
+            transcriber_release.write_manifest(b'{"kind":"test"}', out, use_local_key=False, require_key=True)
+        self.assertFalse((out / transcriber_release.PAYLOAD_NAME).exists())
+        self.assertFalse((out / "transcriber.json").exists())
+
+    def test_ci_key_id_defaults_to_the_current_release_key(self):
+        import signing
+        with patch.dict("os.environ", {"SUBTITLEFLOW_UPDATE_SIGNING_KEY": " ab \n"}, clear=True):
+            self.assertEqual(signing.signing_key(), (signing.KEY_ID, "ab"))
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(signing.signing_key()[1])
+
     def test_packaging_arguments_are_only_required_when_not_signing_an_existing_payload(self):
         with self.assertRaises(SystemExit):
             transcriber_release.main(["--output", str(self.dir / "out")])

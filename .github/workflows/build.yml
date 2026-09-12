@@ -67,6 +67,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: desktop
     runs-on: ubuntu-latest
+    # Signing job: the only desktop job that reads the key. See RELEASE.md「CI 签名环境」to gate it on approval.
     permissions:
       contents: write
     steps:
@@ -80,12 +81,11 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           SUBTITLEFLOW_UPDATE_SIGNING_KEY: ${{ secrets.SUBTITLEFLOW_UPDATE_SIGNING_KEY }}
-          SUBTITLEFLOW_UPDATE_KEY_ID: ${{ vars.SUBTITLEFLOW_UPDATE_KEY_ID }}
         shell: bash
         run: |
           mkdir -p release-assets
           find artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.asset.json' -o -name '*.zip' \) -exec cp {} release-assets/ \;
-          python tools/make_update_manifest.py --repo "${{ github.repository }}" --version "${RELEASE_TAG#v}" --assets release-assets --output release-assets/update.json
+          python tools/make_update_manifest.py --repo "${{ github.repository }}" --version "${RELEASE_TAG#v}" --assets release-assets --output release-assets/update.json --require-key
       - name: Create draft with tested platform builds
         env:
           GH_TOKEN: ${{ github.token }}

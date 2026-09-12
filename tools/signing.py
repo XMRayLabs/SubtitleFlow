@@ -16,14 +16,19 @@ KEYRING_ACCOUNT = "ed25519-v2"
 
 
 def signing_key(use_local_key=False):
-    """Return (key_id, seed hex) from the local keyring or CI environment, or (None, None) when unconfigured."""
+    """Return (key_id, seed hex) from the local keyring or CI environment; the seed is None when unconfigured.
+
+    In CI the key id defaults to KEY_ID, so the release environment only needs the secret. A wrong seed
+    still cannot sign: sign() checks it against the public key embedded in the app.
+    """
     if use_local_key:
         from subtitleflow.gui import native_keyring
         seed = native_keyring().get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
         if not seed:
             raise ValueError("Local signing key unavailable")
         return KEY_ID, seed
-    return os.environ.get("SUBTITLEFLOW_UPDATE_KEY_ID"), os.environ.get("SUBTITLEFLOW_UPDATE_SIGNING_KEY")
+    seed = os.environ.get("SUBTITLEFLOW_UPDATE_SIGNING_KEY", "").strip() or None
+    return os.environ.get("SUBTITLEFLOW_UPDATE_KEY_ID") or KEY_ID, seed
 
 
 def sign(payload: bytes, key_id, seed):

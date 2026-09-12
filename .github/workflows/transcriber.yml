@@ -38,10 +38,9 @@ jobs:
       - run: python tools/verify_transcriber.py dist/SubtitleFlow-Transcriber/SubtitleFlow-Transcriber.exe
       - name: Download pinned model for hashing (not uploaded)
         run: python -c "from huggingface_hub import snapshot_download; print(snapshot_download('${{ env.MODEL_REPO }}', revision='${{ env.MODEL_REVISION }}', local_dir='model'))"
-      - name: Split and sign
-        env:
-          SUBTITLEFLOW_UPDATE_SIGNING_KEY: ${{ secrets.SUBTITLEFLOW_UPDATE_SIGNING_KEY }}
-          SUBTITLEFLOW_UPDATE_KEY_ID: ${{ vars.SUBTITLEFLOW_UPDATE_KEY_ID }}
+      # This job installs torch and runs PyInstaller, so it never sees the signing key: it only leaves
+      # transcriber-payload.json for the approved signing job below.
+      - name: Split and hash
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#transcriber-v}"
@@ -57,13 +56,24 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/transcriber-v')
     needs: windows-cuda
     runs-on: ubuntu-latest
+    # Signing job: the only service job that reads the key. See RELEASE.md「CI 签名环境」to gate it on approval.
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: SubtitleFlow-Transcriber-windows-x86_64
           path: release-assets
+      - run: 'python -m pip --isolated install --require-hashes --only-binary=:all: -r requirements-bootstrap.lock'
+      - run: 'python -m pip --isolated install --require-hashes --only-binary=:all: -r requirements-signing.lock'
+      - name: Verify parts and sign transcriber.json
+        env:
+          SUBTITLEFLOW_UPDATE_SIGNING_KEY: ${{ secrets.SUBTITLEFLOW_UPDATE_SIGNING_KEY }}
+        # Signing in place removes transcriber-payload.json, so only the signed manifest is uploaded
+        run: |
+          python tools/transcriber_release.py --sign-payload release-assets/transcriber-payload.json \
+            --parts-dir release-assets --output release-assets --require-key
       - name: Create draft release with split service package
         env:
           GH_TOKEN: ${{ github.token }}
@@ -71,5 +81,5 @@ jobs:
         # --latest=false: the app's update check reads releases/latest and must only ever see app (v*) releases.
         run: |
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag --latest=false --title "SubtitleFlow 转录服务 $GITHUB_REF_NAME" \
-            --notes "Transcription service parts. Review licenses and upload a locally signed transcriber.json before publishing. Never mark this release as latest."
+            --notes "Transcription service parts with signed transcriber.json. Review licenses before publishing. Never mark this release as latest."
           gh release upload "$GITHUB_REF_NAME" release-assets/*

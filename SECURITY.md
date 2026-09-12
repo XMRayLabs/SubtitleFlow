@@ -11,13 +11,22 @@
 
 ## 更新签名
 
-安装包内置 release-v2 公钥，私钥仅保存在发布者系统凭据库 SubtitleFlow-release / ed25519-v2。不要将私钥写入仓库、日志或 issue。工具 tools/provision_update_key.py 可在首次设置时创建系统凭据与公钥文件；已有发布用户时不可随意更换公钥。key_id 与凭据账户定义在 tools/signing.py 顶部，轮换时只改那里。
+安装包内置 release-v2 公钥。私钥保存在 GitHub 仓库 `release` 环境的 Secret `SUBTITLEFLOW_UPDATE_SIGNING_KEY`（32 字节种子十六进制），不依赖某一位发布者的本机，发布者更替或本机丢失都不会丢钥匙。不要将私钥写入仓库、日志或 issue。已有发布用户时不可随意更换公钥。key_id 与凭据账户定义在 tools/signing.py 顶部，轮换时只改那里。
+
+tools/provision_update_key.py 只用于**首次**创建密钥：系统凭据库里没有钥匙时它会生成新钥匙并覆盖 subtitleflow/update_trust.py 的公钥，等同轮换。不要用它导入已有私钥。
 
 0.2.0 轮换记录：release-v1 私钥已不可用，改用 release-v2。客户端只信任自己安装包内嵌的公钥，因此 0.1.6 及更早版本无法验证新清单——它们不会提示有新版本，只会在状态栏显示「后台更新检查未成功」。这些用户必须通过应用外的渠道通知其手动重新安装。轮换会造成这种断裂，非必要不得重复。
 
-默认采用本机签名：下载并核验 CI 安装包及 asset.json 后运行 tools/make_update_manifest.py --use-local-key。CI 未配置私钥时只生成安装包草稿，不生成 unsigned update.json。必须把合法签名清单加入发布草稿再发布。
+默认由 CI 签名：
 
-若启用 CI 签名，需要单独保护签名作业：配置 SUBTITLEFLOW_UPDATE_SIGNING_KEY Secret（32 字节种子十六进制）与 SUBTITLEFLOW_UPDATE_KEY_ID=release-v2，并使用审批环境、保护分支/标签。拥有源码和 CI 修改权仍可能获取 CI 密钥，因此本机独立签名为默认方案。
+- 只有 `build.yml` 与 `transcriber.yml` 的 `draft-release` 作业（仅由 `v*` / `transcriber-v*` 标签触发）引用私钥；装 torch、跑 PyInstaller 的构建作业与拉取请求作业不引用。来自复刻仓库的拉取请求拿不到仓库 Secret。
+- 签名作业签转录服务清单前按 payload 复算每个分卷的 SHA-256；缺少密钥时作业失败（`--require-key`），不产出无签名草稿。
+- **当前私钥是仓库级 Actions Secret，签名作业没有审批。** 这意味着任何有本仓库写权限的人都能在自己的分支上改工作流读出私钥。写权限只授予可信的发布者。仓库管理员可按 RELEASE.md「CI 签名环境」补上审批环境与标签规则并把 Secret 移入环境。
+- 私钥只能放在 Settings → Secrets and variables → **Actions**，不要放进 Agents（Copilot 云代理）或 Codespaces，那里所有协作者都能让代理读到它。
+
+怀疑泄露只能轮换钥匙，见上方轮换记录的代价。
+
+本机签名保留为后备（例如 CI 不可用）：`--use-local-key` 从系统凭据库读取，或临时设置 `SUBTITLEFLOW_UPDATE_SIGNING_KEY` 环境变量后运行，用完即清除。
 
 这不是 Windows Authenticode 或 Apple Developer ID 签名。平台签名、公证需要相应证书，当前未配置。没有有效签名清单时客户端会阻止自动更新。
 

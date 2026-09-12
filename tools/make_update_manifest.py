@@ -12,6 +12,8 @@ parser.add_argument("--repo", required=True)
 parser.add_argument("--version", required=True)
 parser.add_argument("--assets", type=Path, required=True)
 parser.add_argument("--output", type=Path, default=Path("update.json"))
+parser.add_argument("--require-key", action="store_true",
+                    help="fail instead of omitting update.json when no signing key is configured")
 args = parser.parse_args()
 if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo):
     parser.error("repo must be owner/repository")
@@ -40,6 +42,8 @@ if not platforms:
 payload = json.dumps({"version": args.version, "platforms": platforms}, separators=(",", ":")).encode()
 key_id, seed = signing_key(args.use_local_key)
 if not seed or not key_id:
+    if args.require_key:
+        raise SystemExit("Signing key not configured")
     # Keep installer drafts usable, but never publish an unsigned update.json.
     args.output.unlink(missing_ok=True)
     print("Signing key not configured; update.json intentionally omitted")

@@ -9,10 +9,12 @@ trust_remote_code, so it must be pinned by hash as well as by revision).
         --model-dir <snapshot dir> --output dist/transcriber-release [--use-local-key]
 
 Without a key the payload is kept as transcriber-payload.json instead of being discarded, so the
-release can be packaged on the build machine and signed later where the key lives:
+release can be packaged on the build machine and signed later where the key lives. The release
+workflow does this in a separate job behind the approved `release` environment, re-hashing the parts
+first; the same command works locally as a fallback:
 
     python tools/transcriber_release.py --sign-payload transcriber-payload.json \
-        --output release-assets --use-local-key
+        --parts-dir <folder with the .zip.NNN parts> --output release-assets --use-local-key
 """
 import argparse
 import hashlib
@@ -31,7 +33,7 @@ MODEL_REPO = "OpenMOSS-Team/MOSS-Transcribe-Diarize"
 PLATFORM = "windows-x86_64"
 KIND = "subtitleflow-transcriber"
 
-__all__ = ["archive", "split", "payload", "sign", "write_manifest", "main"]
+__all__ = ["archive", "split", "payload", "sign", "verify_parts", "write_manifest", "main"]
 
 
 def file_digest(path: Path):
@@ -85,6 +87,32 @@ def payload(version, parts, entry, model_repo, model_revision, model_dir) -> byt
     return json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def verify_parts(data: bytes, parts_dir: Path):
+    """Re-hash every part the payload lists before a signature vouches for them.
+
+    The payload and the parts travel together from the build job, so this cannot catch a build that lied
+    about both; it catches a part that was truncated, swapped or re-uploaded after the hashes were taken.
+    """
+    manifest = json.loads(data)
+    whole, total = hashlib.sha256(), 0
+    for part in manifest["parts"]:
+        name = part["name"]
+        path = parts_dir / name
+        if Path(name).name != name or not path.is_file():
+            raise ValueError(f"Part listed in payload is missing: {name}")
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(1 << 20):
+                digest.update(chunk)
+                whole.update(chunk)
+        size = path.stat().st_size
+        if size != part["size"] or digest.hexdigest() != part["sha256"]:
+            raise ValueError(f"Part does not match payload: {name}")
+        total += size
+    if total != manifest["archive_size"] or whole.hexdigest() != manifest["archive_sha256"]:
+        raise ValueError("Parts do not reassemble into the archive the payload describes")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Package the transcription service release")
     parser.add_argument("--version")
@@ -96,7 +124,13 @@ def main(argv=None):
     parser.add_argument("--use-local-key", action="store_true")
     parser.add_argument("--sign-payload", type=Path,
                         help=f"sign an existing {PAYLOAD_NAME} from the build machine; needs no build or model")
+    parser.add_argument("--parts-dir", type=Path,
+                        help="with --sign-payload: re-hash the parts in this folder against the payload before signing")
+    parser.add_argument("--require-key", action="store_true",
+                        help="fail instead of keeping an unsigned payload when no signing key is configured")
     args = parser.parse_args(argv)
+    if args.parts_dir and not args.sign_payload:
+        parser.error("--parts-dir only applies to --sign-payload")
     if not args.sign_payload:
         missing = [name for name in ("version", "dist", "model_dir", "model_revision") if getattr(args, name) is None]
         if missing:
@@ -105,18 +139,21 @@ def main(argv=None):
             parser.error("--model-revision must be the full commit hash")
     args.output.mkdir(parents=True, exist_ok=True)
     if args.sign_payload:
-        return write_manifest(args.sign_payload.read_bytes(), args.output, args.use_local_key)
+        data = args.sign_payload.read_bytes()
+        if args.parts_dir:
+            verify_parts(data, args.parts_dir)
+        return write_manifest(data, args.output, args.use_local_key, args.require_key)
     name = f"SubtitleFlow-Transcriber-{args.version}-{PLATFORM}.zip"
     bundle = archive(args.dist, args.output / name)
     parts = split(bundle, args.output, args.part_size)
     bundle.unlink()
     exe = next(p for p in args.dist.iterdir() if p.suffix.lower() == ".exe")
     data = payload(args.version, parts, f"{args.dist.name}/{exe.name}", MODEL_REPO, args.model_revision, args.model_dir)
-    write_manifest(data, args.output, args.use_local_key)
+    write_manifest(data, args.output, args.use_local_key, args.require_key)
     print("\n".join(f"{p.name}  {p.stat().st_size}" for p in parts))
 
 
-def write_manifest(data: bytes, output: Path, use_local_key: bool):
+def write_manifest(data: bytes, output: Path, use_local_key: bool, require_key=False):
     """Sign the payload into transcriber.json, or keep it unsigned for offline signing.
 
     The hashes can only be computed where the parts and the model live, which is the build machine.
@@ -127,6 +164,9 @@ def write_manifest(data: bytes, output: Path, use_local_key: bool):
     key_id, seed = signing_key(use_local_key)
     manifest, unsigned = output / "transcriber.json", output / PAYLOAD_NAME
     if not seed or not key_id:
+        if require_key:
+            # The signing job exists only to sign; quietly handing back a payload would leave a draft nobody can install
+            raise ValueError("Signing key not configured")
         # An unsigned manifest is never produced; the payload alone is inert without a signature.
         manifest.unlink(missing_ok=True)
         unsigned.write_bytes(data)
