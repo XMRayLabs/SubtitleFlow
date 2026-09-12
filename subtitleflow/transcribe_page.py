@@ -5,7 +5,8 @@ import time
 
 from PySide6.QtCore import QUrl, QTimer
 from PySide6.QtGui import QColor, QDesktopServices
-from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QSpinBox, QProgressBar, QFileDialog, QTableWidgetItem
+from PySide6.QtWidgets import (QWidget, QFrame, QVBoxLayout, QHBoxLayout, QComboBox, QSpinBox, QProgressBar,
+                               QFileDialog, QTableWidgetItem)
 
 from .transcriber_install import Installer, fetch_release, support_problem
 from .transcription import TranscribeJob, fmt_time, is_media, MEDIA_SUFFIXES
@@ -13,6 +14,8 @@ from .updates import DEFAULT_REPO
 from .widgets import FileTable, Worker
 
 DEFAULT_SEGMENT_MINUTES = 5
+LANGUAGE_NAMES = {"auto": "自动识别", "zh": "中文", "yue": "粤语", "en": "英语", "ja": "日语", "ko": "韩语",
+                  "fr": "法语", "de": "德语", "es": "西班牙语", "pt": "葡萄牙语", "ru": "俄语", "it": "意大利语"}
 STATUS_COLORS = {"已完成": "#16856b", "失败": "#d14d61", "转录中": "#5264e8", "处理中": "#5264e8"}
 RETRYABLE = ("失败", "已取消", "未处理")
 
@@ -32,6 +35,8 @@ class TranscribePage(QWidget):
         self.outputs: dict[int, Path] = {}   # 行 → 实际保存的 SRT 路径
         self.last_output_row = None          # 最近完成的行，「查看结果」默认打开它
         self.install_clock = None            # (开始时间, 开始时的已下载字节)，用于计算安装速度
+        self.engine_infos = []               # /v1/engines 公布的引擎；拿不到时不显示引擎选项，按服务默认值转录
+        self.saved_choice = {}               # 上次选择的 engine / model / language，服务公布后再套用
 
         page = QVBoxLayout(self)
         page.setContentsMargins(0, 0, 0, 0)
@@ -75,6 +80,23 @@ class TranscribePage(QWidget):
         segment_row = row(label("分段时长", "section"), self.segment_minutes, label("切点取前后 2 分钟内的静音处；显存较小或转录失败时可以调短"))
         segment_row.addStretch()
         settings.addLayout(segment_row)
+        self.engine = QComboBox()
+        self.engine.setMinimumWidth(150)
+        self.engine.currentIndexChanged.connect(self.refresh_engine)
+        self.model = QComboBox()
+        self.model.setMinimumWidth(150)
+        self.language = QComboBox()
+        self.language.setMinimumWidth(130)
+        self.model_label = label("模型")
+        self.language_label = label("语言")
+        self.engine_row = QWidget()
+        engine_row = row(label("转录引擎", "section"), self.engine, self.model_label, self.model,
+                         self.language_label, self.language)
+        engine_row.setContentsMargins(0, 0, 0, 0)
+        engine_row.addStretch()
+        self.engine_row.setLayout(engine_row)
+        self.engine_row.hide()
+        settings.addWidget(self.engine_row)
         page.addWidget(self.settings_group)
 
         self.progress = QProgressBar()
@@ -208,13 +230,77 @@ class TranscribePage(QWidget):
             text += f" · {speed / 1024 ** 2:.1f} MB/s · 剩余约 {fmt_time((total - done) / speed)}"
         self.status.setText(text)
 
+    # ---- 引擎选项 -------------------------------------------------------
+
+    def reset_engines(self):
+        """换过（或停用）转录服务后先收起选项：新服务公布的引擎可能完全不同。"""
+        self.engine_infos = []
+        self.engine_row.hide()
+
+    def load_engines(self):
+        """向服务询问它实际能运行的引擎。拿不到就不显示这一行，转录时不带参数、由服务取默认值。"""
+        service = self.window.transcription_service
+        self.reset_engines()
+        if service is None:
+            return
+        self.window.launch(lambda _: service.ensure().engines(),
+                           lambda infos: self.show_engines(service, infos), lambda message: None)
+
+    def show_engines(self, service, infos):
+        """service 是这份引擎表的来源。查询在后台线程里跑，期间可能装上、卸掉或换掉转录服务；
+        迟到的结果必须丢弃，否则会把旧服务的引擎名发给新服务，换来一个 400、整批失败。"""
+        if service is not self.window.transcription_service:
+            return
+        usable = [i for i in (infos if isinstance(infos, list) else []) if isinstance(i, dict) and i.get("name") and i.get("models") and i.get("languages")]
+        self.engine_infos = usable
+        if not usable:
+            return
+        self.engine.blockSignals(True)
+        self.engine.clear()
+        for info in usable:
+            self.engine.addItem(info["name"], info)
+        index = self.engine.findText(self.saved_choice.get("engine", ""))
+        self.engine.setCurrentIndex(max(0, index))
+        self.engine.blockSignals(False)
+        self.engine.setVisible(len(usable) > 1)
+        self.refresh_engine()
+        self.engine_row.show()
+
+    def refresh_engine(self):
+        """按所选引擎公布的能力填模型与语言；只有一个取值时不占界面，提交时也就用它。"""
+        info = self.engine.currentData()
+        if not info:
+            return
+        self.model.clear()
+        self.model.addItems(info["models"])
+        self.model.setCurrentText(self.saved_choice.get("model") if self.saved_choice.get("model") in info["models"]
+                                  else info.get("default_model") or info["models"][0])
+        self.language.clear()
+        for code in info["languages"]:
+            self.language.addItem(LANGUAGE_NAMES.get(code, code), code)
+        saved = self.language.findData(self.saved_choice.get("language"))
+        self.language.setCurrentIndex(max(0, saved))
+        for widget, count in ((self.model, len(info["models"])), (self.model_label, len(info["models"])),
+                              (self.language, len(info["languages"])), (self.language_label, len(info["languages"]))):
+            widget.setVisible(count > 1)
+
+    def choice(self):
+        """提交任务时使用的 engine / model / language。引擎未知时返回空：宁可让服务取默认值，
+        也不把上次保存的选择发出去——换过转录服务的话那个值可能已经不存在，只会换来一个 400。"""
+        if not self.engine_infos:
+            return {}
+        return {"engine": self.engine.currentText(), "model": self.model.currentText(),
+                "language": self.language.currentData()}
+
     # ---- 设置 ----------------------------------------------------------
 
     def settings(self):
-        return {"segment_minutes": self.segment_minutes.value()}
+        return {"segment_minutes": self.segment_minutes.value(), **self.saved_choice, **self.choice()}
 
     def apply_settings(self, data):
         self.segment_minutes.setValue(int(data.get("segment_minutes", DEFAULT_SEGMENT_MINUTES)))
+        self.saved_choice = {name: data[name] for name in ("engine", "model", "language")
+                             if isinstance(data.get(name), str) and data[name]}
 
     # ---- 文件列表 -------------------------------------------------------
 
@@ -285,8 +371,10 @@ class TranscribePage(QWidget):
             self.set_row(row_index, "等待", "")
         self.set_running(True)
         paths = [self.paths[i] for i in self.rows]
-        minutes, cancel = self.segment_minutes.value(), self.cancel
-        self.worker = Worker(lambda event: TranscribeJob(paths, minutes * 60, service, cancel, event).run())
+        minutes, cancel, choice = self.segment_minutes.value(), self.cancel, self.choice()
+        self.worker = Worker(lambda event: TranscribeJob(
+            paths, minutes * 60, service, cancel, event,
+            engine=choice.get("engine"), model=choice.get("model"), language=choice.get("language")).run())
         self.window.workers.append(self.worker)
         self.worker.event.connect(self.job_event)
         self.worker.failed.connect(self.transcription_failed)

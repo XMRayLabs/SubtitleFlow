@@ -103,6 +103,44 @@ class TranscribePageTests(WindowTestCase):
             app.processEvents()
             time.sleep(0.01)
 
+    def wait_for(self, condition):
+        deadline = time.time() + 20
+        while not condition():
+            if time.time() > deadline:
+                self.fail("engines were not loaded")
+            app.processEvents()
+            time.sleep(0.01)
+
+    def test_engine_options_come_from_the_service(self):
+        self.page.load_engines()
+        self.wait_for(lambda: bool(self.page.engine_infos))
+        self.assertFalse(self.page.engine_row.isHidden())
+        self.assertEqual(self.page.engine.currentText(), "fake")
+        self.assertEqual([self.page.language.itemData(i) for i in range(self.page.language.count())],
+                         ["auto", "zh", "en"])
+        # 只有一个模型时不占界面，提交时仍然用它
+        self.assertTrue(self.page.model.isHidden())
+        self.page.language.setCurrentIndex(2)
+        self.assertEqual(self.page.choice(), {"engine": "fake", "model": "fake", "language": "en"})
+        self.assertEqual(self.page.settings()["language"], "en")
+
+    def test_engines_from_a_replaced_service_are_discarded(self):
+        # 查询在后台线程里跑，期间服务可能被装上、卸掉或换掉；迟到的结果不能套用到新服务上，
+        # 否则会把旧服务的引擎名发出去，换来一个 400、整批转录失败
+        stale = self.window.transcription_service
+        self.window.transcription_service = None
+        self.page.show_engines(stale, [{"name": "moss", "models": ["moss"], "languages": ["auto"]}])
+        self.assertEqual(self.page.engine_infos, [])
+        self.assertEqual(self.page.choice(), {})
+        self.assertTrue(self.page.engine_row.isHidden())
+
+    def test_without_engine_list_nothing_is_sent_and_the_row_stays_hidden(self):
+        self.page.apply_settings({"engine": "moss", "model": "moss-tiny", "language": "ja"})
+        self.assertEqual(self.page.choice(), {})
+        self.assertTrue(self.page.engine_row.isHidden())
+        # 上次的选择仍然留在设置里，等服务公布引擎后再套用
+        self.assertEqual(self.page.settings()["engine"], "moss")
+
     def test_only_media_files_are_added(self):
         media = Path(self.data.name) / "a.mp3"
         other = Path(self.data.name) / "a.txt"

@@ -37,6 +37,8 @@ def native_keyring():
 class Window(QMainWindow):
     # 后台线程发现转录服务接口版本不兼容时发出，由界面线程切换到"更新转录服务"
     service_incompatible = Signal()
+    # 预热线程读到 /v1/engines 后发出（服务, 引擎表），由界面线程填转录页的引擎、模型与语言
+    engines_loaded = Signal(object, object)
 
     def __init__(self, load_preferences=True):
         super().__init__()
@@ -55,6 +57,7 @@ class Window(QMainWindow):
         self.transcription_outdated = False
         from .layout import build
         build(self, FileTable)
+        self.engines_loaded.connect(self.transcribe_page.show_engines)
         if load_preferences:
             self.load_settings()
         self.refresh_transcription_service()
@@ -80,6 +83,7 @@ class Window(QMainWindow):
             command = development_command()
             self.transcription_service = ServiceManager(*command) if command else None
         self.uninstall_action.setVisible(installed is not None)
+        self.transcribe_page.reset_engines()
         self.transcribe_page.refresh_state(update_status=True)
 
     def mark_transcription_outdated(self):
@@ -88,6 +92,7 @@ class Window(QMainWindow):
             self.transcription_service.stop()
         self.transcription_service = None
         self.transcription_outdated = True
+        self.transcribe_page.reset_engines()
         self.transcribe_page.refresh_state(update_status=True)
 
     def uninstall_transcriber(self):
@@ -117,10 +122,11 @@ class Window(QMainWindow):
 
         def start():
             try:
-                service.ensure()
+                self.engines_loaded.emit(service, service.ensure().engines())
             except IncompatibleService:
                 self.service_incompatible.emit()
-            except ServiceError:
+            except (ServiceError, KeyError, TypeError, ValueError):
+                # 预热失败不提示：真正要转录时会再启动一次服务，并在那时报出原因
                 pass
 
         threading.Thread(target=start, daemon=True).start()

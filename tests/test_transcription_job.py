@@ -42,6 +42,22 @@ class TranscribeJobTests(unittest.TestCase):
         self.assertEqual([(c.start, c.end, c.text) for c in cues], [(0, 300000, "第1段"), (300000, 700000, "第2段")])
         self.assertIn(("file", 0, "已完成", str(self.dir / "采访.srt")), events)
 
+    def test_requested_engine_options_reach_the_service(self):
+        source = self.source("talk.wav", duration=60)
+        events = []
+        status = TranscribeJob([source], 300, self.service, threading.Event(), lambda *e: events.append(e),
+                               engine="fake", model="fake", language="en").run()
+        self.assertEqual(status, "done")
+
+    def test_unsupported_language_fails_the_file_instead_of_falling_back(self):
+        source = self.source("talk.wav", duration=60)
+        events = []
+        status = TranscribeJob([source], 300, self.service, threading.Event(), lambda *e: events.append(e),
+                               language="ja").run()
+        self.assertEqual(status, "partial")
+        self.assertFalse((self.dir / "talk.srt").exists())
+        self.assertTrue(any(e[:3] == ("file", 0, "失败") and "不支持语言 ja" in e[3] for e in events), events)
+
     def test_failed_file_does_not_stop_the_batch(self):
         bad = self.source("bad.wav", duration=60, fail="显存不足")
         good = self.source("good.wav", duration=60)
