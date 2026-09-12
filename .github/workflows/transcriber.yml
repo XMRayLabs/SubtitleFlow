@@ -23,7 +23,8 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r transcriber/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128
       - run: python -m pip install pyinstaller==6.19.0 pyinstaller-hooks-contrib==2026.7 PyNaCl==1.6.2
-      - run: python -m unittest tests.test_transcriber_segments tests.test_transcriber_server -v
+      # 这条流水线装了 torch，MossEngine 的契约测试只有在这里才真正执行（主程序的 CI 会跳过）
+      - run: python -m unittest tests.test_transcriber_segments tests.test_transcriber_server tests.test_transcriber_engine -v
       - name: Fetch pinned LGPL ffmpeg
         shell: pwsh
         run: |
