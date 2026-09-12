@@ -63,6 +63,9 @@ class TranscribeJobTests(unittest.TestCase):
             if event[:3] == ("file", 0, "转录中"):
                 cancel.set()
 
+        # 先把服务启动好再计时：这里要测的是「取消不必等完当前分段」，而服务首次启动的耗时与取消无关
+        # （CI 的 macOS 机器上光是启动一次服务进程就要约 35 秒，混进来会让计时窗口失去意义）。
+        self.service.ensure()
         started = time.time()
         status = TranscribeJob([slow, later], 300, self.service, cancel, on_event).run()
         self.assertEqual(status, "cancelled")

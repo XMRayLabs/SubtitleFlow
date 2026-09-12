@@ -87,6 +87,10 @@ class TranscribePageTests(WindowTestCase):
         self.window.transcription_service = ServiceManager([sys.executable, "-m", "transcriber", "--engine", "fake"], cwd=root)
         self.addCleanup(self.window.transcription_service.stop)
         self.page = self.window.transcribe_page
+        # 生产代码每次改动 transcription_service 都会刷新转录页（见 Window.refresh_transcription_service）。
+        # 这里直接注入服务，同样要刷新：否则在不支持转录的机器上（CI 没有 NVIDIA 显卡，macOS 更是不支持）
+        # 主按钮仍停在「暂不支持」且处于禁用状态，click() 什么也不会发生，整行会一直停在「等待」。
+        self.page.refresh_state()
 
     def wait_idle(self):
         deadline = time.time() + 20
