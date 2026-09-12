@@ -91,6 +91,9 @@ class TranscribePageTests(WindowTestCase):
         # 这里直接注入服务，同样要刷新：否则在不支持转录的机器上（CI 没有 NVIDIA 显卡，macOS 更是不支持）
         # 主按钮仍停在「暂不支持」且处于禁用状态，click() 什么也不会发生，整行会一直停在「等待」。
         self.page.refresh_state()
+        # 先把服务进程拉起来，让 wait_idle() 的等待窗口只覆盖转录本身：服务首次启动在 CI 的 macOS
+        # 机器上约需 35 秒，算进去会直接顶穿 wait_idle 的 20 秒上限。
+        self.window.transcription_service.ensure()
 
     def wait_idle(self):
         deadline = time.time() + 20
