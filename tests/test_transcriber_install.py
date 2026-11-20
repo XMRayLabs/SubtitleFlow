@@ -28,6 +28,7 @@ class FileServer:
 
     def __init__(self, files):
         self.files, self.requests, self.fail = files, [], set()
+        self.advertised = {}   # path -> 声明的 Content-Length（用来模拟中途断流）
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -48,7 +49,7 @@ class FileServer:
                     self.send_header("Content-Range", f"bytes {start}-{len(data) - 1}/{len(data)}")
                 else:
                     self.send_response(200)
-                self.send_header("Content-Length", str(len(data) - start))
+                self.send_header("Content-Length", str(owner.advertised.get(self.path, len(data)) - start))
                 self.end_headers()
                 self.wfile.write(data[start:])
 
@@ -119,6 +120,19 @@ class InstallerTests(unittest.TestCase):
         self.installer().run()
         resumed = [r for p, r in self.server.requests if p == "/rel/s.zip.001" and r]
         self.assertEqual(resumed, ["bytes=1000-"])
+        self.assertIsNotNone(install.installed_service(self.root))
+
+    def test_truncated_download_keeps_partial_and_resumes(self):
+        name = "/rel/s.zip.001"
+        full = self.server.files[name]
+        self.server.files[name] = full[:1000]      # 服务器声明 Content-Length 并只发这么多
+        self.server.advertised = {name: len(full)}
+        with self.assertRaisesRegex(OSError, "下载中断"):
+            self.installer().run()
+        partial = self.root / "transcriber" / "downloads" / "1.0.0" / "s.zip.001.partial"
+        self.assertTrue(partial.exists())          # 没有被当成“校验失败”删掉
+        self.server.files[name], self.server.advertised = full, {}
+        self.installer().run()
         self.assertIsNotNone(install.installed_service(self.root))
 
     def test_model_download_falls_back_to_mirror(self):

@@ -300,6 +300,10 @@ class Installer:
                     self._report(label)
                     if self.cancel.is_set():
                         raise Cancelled("安装已取消，下次会从断点继续")
+            # 服务器提前断流时 read() 只返回空字节、不抛异常；不核对长度就会把残缺文件当成下载完成，
+            # 然后被哈希校验删掉并误报“可能被篡改”。保留 .partial，让下次从断点续传。
+            if self.done - start_done < size:
+                raise OSError(f"下载中断：只收到 {self.done - start_done} / {size} 字节")
 
     def _check_archive(self, parts):
         whole = hashlib.sha256()

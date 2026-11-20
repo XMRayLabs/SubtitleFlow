@@ -85,6 +85,31 @@ class DownloadTests(unittest.TestCase):
             enhancer.download(lambda n: None, lambda: False)
         self.assertEqual(list(self.dir.iterdir()), [])
 
+    def test_stream_cut_short_keeps_partial_and_tries_next_address(self):
+        spec = weights("a.ckpt", self.data, "https://hf/a", "https://mirror/a")
+
+        class Cut(Opener):
+            def __call__(self, request, timeout=None):
+                response = super().__call__(request, timeout)
+                if request.full_url == "https://hf/a":
+                    return Response(response.read()[:500], response.status)   # 只送 500 字节就断流
+                return response
+
+        opener = Cut({"https://hf/a": self.data, "https://mirror/a": self.data})
+        Enhancer(self.dir, (spec,), opener).download(lambda n: None, lambda: False)
+        self.assertEqual((self.dir / "a.ckpt").read_bytes(), self.data)
+        self.assertEqual(opener.requests[1], ("https://mirror/a", "bytes=500-"))   # 续传，不是重来
+
+    def test_progress_counts_a_partial_that_was_already_complete(self):
+        other = bytes(reversed(self.data))
+        specs = (weights("a.ckpt", self.data, "https://hf/a"), weights("b.ckpt", other, "https://hf/b"))
+        (self.dir / "a.ckpt.partial").write_bytes(self.data)          # 上次下完、还没来得及改名
+        enhancer = Enhancer(self.dir, specs, Opener({"https://hf/a": self.data, "https://hf/b": other}))
+        total, seen = enhancer.missing_bytes(), []
+        enhancer.download(seen.append, lambda: False)
+        self.assertEqual(seen[-1], total)
+        self.assertEqual((self.dir / "a.ckpt").read_bytes(), self.data)
+
     def test_stopping_keeps_the_partial_file_for_next_time(self):
         spec = weights("a.ckpt", self.data, "https://hf/a")
         Enhancer(self.dir, (spec,), Opener({"https://hf/a": self.data})).download(lambda n: None, lambda: True)

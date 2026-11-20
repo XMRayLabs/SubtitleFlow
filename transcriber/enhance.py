@@ -100,14 +100,14 @@ class Enhancer:
             partial.replace(self.folder / weights.name)
 
     def _fetch(self, url, partial: Path, size, on_progress, should_stop) -> int:
-        """把 url 续传到 partial，返回本次调用新下载的字节数。"""
+        """把 url 续传到 partial，返回 partial 现有的字节数（含之前已下好的部分），供进度累计。"""
         have = partial.stat().st_size if partial.exists() else 0
         if have > size:
             partial.unlink()
             have = 0
         fresh = 0
         if have == size:
-            return fresh
+            return have      # 上次已下完、只差改名：整份都算进进度，否则总进度到不了 100%
         request = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
         with self.opener(request, timeout=DOWNLOAD_TIMEOUT) as response:
             if have and response.status != 206:   # 服务器不支持续传，从头下载
@@ -121,6 +121,9 @@ class Enhancer:
                     handle.write(block)
                     fresh += len(block)
                     on_progress(have + fresh)
+        if not should_stop() and have + fresh < size:
+            # 提前断流不会抛异常；保留 .partial 并换下一个地址续传，别当成下载完成去校验、删除
+            raise OSError(f"下载中断：只收到 {have + fresh} / {size} 字节")
         return have + fresh
 
     def load(self):
