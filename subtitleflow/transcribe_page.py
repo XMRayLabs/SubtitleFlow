@@ -6,7 +6,7 @@ import time
 from PySide6.QtCore import QUrl, QTimer
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QWidget, QFrame, QVBoxLayout, QHBoxLayout, QComboBox, QSpinBox, QProgressBar,
-                               QFileDialog, QTableWidgetItem)
+                               QCheckBox, QFileDialog, QHeaderView, QTableWidgetItem)
 
 from .transcriber_install import Installer, fetch_release, support_problem
 from .transcription import TranscribeJob, fmt_time, is_media, MEDIA_SUFFIXES
@@ -64,6 +64,12 @@ class TranscribePage(QWidget):
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.setMinimumHeight(170)
+        # 最后一列放每行的「移除」按钮
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderItem(3, QTableWidgetItem(""))
+        # ResizeToContents 不计算单元格里的按钮宽度，会把按钮压扁，所以固定列宽
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        self.table.setColumnWidth(3, 76)
         file_layout.addWidget(self.table, 1)
         page.addWidget(files, 1)
 
@@ -77,7 +83,7 @@ class TranscribePage(QWidget):
         self.segment_minutes.setValue(DEFAULT_SEGMENT_MINUTES)
         self.segment_minutes.setSuffix(" 分钟")
         self.segment_minutes.setFixedWidth(115)
-        segment_row = row(label("分段时长", "section"), self.segment_minutes, label("切点取前后 2 分钟内的静音处；显存较小或转录失败时可以调短"))
+        segment_row = row(label("分段时长", "section"), self.segment_minutes)
         segment_row.addStretch()
         settings.addLayout(segment_row)
         self.engine = QComboBox()
@@ -89,14 +95,28 @@ class TranscribePage(QWidget):
         self.language.setMinimumWidth(130)
         self.model_label = label("模型")
         self.language_label = label("语言")
+        # 只有一个取值的项不给下拉框，但仍要让人看到在用什么；全部固定时这一行只剩这段文字
+        self.engine_summary = label("")
         self.engine_row = QWidget()
         engine_row = row(label("转录引擎", "section"), self.engine, self.model_label, self.model,
-                         self.language_label, self.language)
+                         self.language_label, self.language, self.engine_summary)
         engine_row.setContentsMargins(0, 0, 0, 0)
         engine_row.addStretch()
         self.engine_row.setLayout(engine_row)
         self.engine_row.hide()
         settings.addWidget(self.engine_row)
+        # 只有服务公布了这项能力才显示；默认关闭，打开后按上次的选择保存
+        self.enhance = QCheckBox("降噪与去混响")
+        self.enhance.setToolTip("转录前先去掉环境噪音和房间回声，适合只有人声、没有音乐的录音。\n"
+                                "首次使用需要下载约 1.7 GB 模型；转录会变慢。处理后如果人声发闷、吞字，请关闭。")
+        self.enhance_row = QWidget()
+        enhance_row = row(label("人声增强", "section"), self.enhance,
+                          label("适合有环境噪音或回声的录音，首次使用需下载约 1.7 GB"))
+        enhance_row.setContentsMargins(0, 0, 0, 0)
+        enhance_row.addStretch()
+        self.enhance_row.setLayout(enhance_row)
+        self.enhance_row.hide()
+        settings.addWidget(self.enhance_row)
         page.addWidget(self.settings_group)
 
         self.progress = QProgressBar()
@@ -236,6 +256,7 @@ class TranscribePage(QWidget):
         """换过（或停用）转录服务后先收起选项：新服务公布的引擎可能完全不同。"""
         self.engine_infos = []
         self.engine_row.hide()
+        self.enhance_row.hide()
 
     def load_engines(self):
         """向服务询问它实际能运行的引擎。拿不到就不显示这一行，转录时不带参数、由服务取默认值。"""
@@ -283,6 +304,27 @@ class TranscribePage(QWidget):
         for widget, count in ((self.model, len(info["models"])), (self.model_label, len(info["models"])),
                               (self.language, len(info["languages"])), (self.language_label, len(info["languages"]))):
             widget.setVisible(count > 1)
+        self.refresh_engine_summary(info)
+        # 旧版服务不认识 enhance，发过去会被忽略；不公布这项能力就不给开关，免得勾了却没有效果
+        self.enhance_row.setVisible(info.get("enhance") is True)
+
+    def refresh_engine_summary(self, info):
+        """把没有下拉框的固定取值写成一段文字，例如「MOSS-Transcribe-Diarize · 自动识别语言」。"""
+        parts = []
+        model = self.model.currentText()
+        short_model = model.rsplit("/", 1)[-1]
+        single_model = len(info["models"]) <= 1
+        # 模型名里已经带着引擎名（moss 与 MOSS-Transcribe-Diarize）时不重复写引擎
+        if self.engine.count() <= 1 and not (single_model and info["name"].lower() in short_model.lower()):
+            parts.append(info["name"])
+        if single_model:
+            parts.append(short_model)
+        if len(info["languages"]) <= 1:
+            code = self.language.currentData()
+            parts.append("自动识别语言" if code == "auto" else LANGUAGE_NAMES.get(code, code))
+        self.engine_summary.setText(" · ".join(parts))
+        self.engine_summary.setToolTip(model)
+        self.engine_summary.setVisible(bool(parts))
 
     def choice(self):
         """提交任务时使用的 engine / model / language。引擎未知时返回空：宁可让服务取默认值，
@@ -292,13 +334,18 @@ class TranscribePage(QWidget):
         return {"engine": self.engine.currentText(), "model": self.model.currentText(),
                 "language": self.language.currentData()}
 
+    def wants_enhance(self):
+        return self.enhance.isChecked() and bool(self.engine_infos) and self.engine.currentData().get("enhance") is True
+
     # ---- 设置 ----------------------------------------------------------
 
     def settings(self):
-        return {"segment_minutes": self.segment_minutes.value(), **self.saved_choice, **self.choice()}
+        return {"segment_minutes": self.segment_minutes.value(), "enhance": self.enhance.isChecked(),
+                **self.saved_choice, **self.choice()}
 
     def apply_settings(self, data):
         self.segment_minutes.setValue(int(data.get("segment_minutes", DEFAULT_SEGMENT_MINUTES)))
+        self.enhance.setChecked(data.get("enhance") is True)
         self.saved_choice = {name: data[name] for name in ("engine", "model", "language")
                              if isinstance(data.get(name), str) and data[name]}
 
@@ -323,15 +370,42 @@ class TranscribePage(QWidget):
                 self.table.insertRow(row_index)
                 for col, text in enumerate((path.name, "等待", "")):
                     self.table.setItem(row_index, col, QTableWidgetItem(text))
+                self.table.setCellWidget(row_index, 3, self.remove_button(path))
         self.file_count.setText(f"{len(self.paths)} 个文件")
         self.status.setText(f"已添加 {len(self.paths)} 个音视频文件")
         self.table.viewport().update()
+
+    def remove_button(self, path):
+        from .layout import button
+        # 按路径而不是行号找行：前面的行被移除后，这一行的行号会变
+        widget = button("移除", lambda: self.remove_file(path), "quiet")
+        widget.setToolTip("从列表中移除，不会删除文件本身")
+        return widget
+
+    def remove_file(self, path):
+        if self.busy() or path not in self.paths:
+            return
+        index = self.paths.index(path)
+        self.paths.pop(index)
+        self.table.removeRow(index)
+        # 后面的行整体前移一行，记录的保存位置跟着前移，「查看结果」才不会打开别的文件的目录
+        self.outputs = {row - (row > index): target for row, target in self.outputs.items() if row != index}
+        if self.last_output_row == index:
+            self.last_output_row = None
+        elif self.last_output_row is not None and self.last_output_row > index:
+            self.last_output_row -= 1
+        if not self.paths:
+            return self.clear_files()
+        self.update_result_buttons()
+        self.file_count.setText(f"{len(self.paths)} 个文件")
+        self.status.setText(f"已移除 {path.name}")
 
     def clear_files(self):
         if self.busy():
             return
         self.paths.clear()
         self.outputs.clear()
+        self.last_output_row = None
         self.update_result_buttons()
         self.table.setRowCount(0)
         self.file_count.setText("0 个文件")
@@ -371,10 +445,11 @@ class TranscribePage(QWidget):
             self.set_row(row_index, "等待", "")
         self.set_running(True)
         paths = [self.paths[i] for i in self.rows]
-        minutes, cancel, choice = self.segment_minutes.value(), self.cancel, self.choice()
+        minutes, cancel, choice, enhance = self.segment_minutes.value(), self.cancel, self.choice(), self.wants_enhance()
         self.worker = Worker(lambda event: TranscribeJob(
             paths, minutes * 60, service, cancel, event,
-            engine=choice.get("engine"), model=choice.get("model"), language=choice.get("language")).run())
+            engine=choice.get("engine"), model=choice.get("model"), language=choice.get("language"),
+            enhance=enhance).run())
         self.window.workers.append(self.worker)
         self.worker.event.connect(self.job_event)
         self.worker.failed.connect(self.transcription_failed)
@@ -457,7 +532,8 @@ class TranscribePage(QWidget):
             self.status.setText("正在取消…")
 
     def set_running(self, active):
-        for widget in (self.settings_group, self.add_button, self.clear_button, self.start_button):
+        removes = [self.table.cellWidget(row, 3) for row in range(self.table.rowCount())]
+        for widget in (self.settings_group, self.add_button, self.clear_button, self.start_button, *removes):
             widget.setEnabled(not active)
         self.cancel_button.setVisible(active)
         self.cancel_button.setEnabled(active)

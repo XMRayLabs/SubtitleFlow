@@ -76,9 +76,11 @@ def create_server(service, token: str, host="127.0.0.1", port=0) -> Server:
                 return
             try:
                 if self.path == "/v1/jobs":
-                    # engine / model / language 可省略，省略时用引擎默认值；给了无效值一律 400，不静默忽略
+                    # engine / model / language / enhance 可省略，省略时用引擎默认值（enhance 默认不开）；
+                    # 给了无效值一律 400，不静默忽略
                     job = service.submit(data.get("path"), data.get("segment_seconds"),
-                                         data.get("engine"), data.get("model"), data.get("language"))
+                                         data.get("engine"), data.get("model"), data.get("language"),
+                                         data.get("enhance"))
                     return self.reply(201, job.snapshot())
             except ValueError as exc:
                 return self.reply(400, {"error": str(exc)})

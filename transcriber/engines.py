@@ -10,14 +10,16 @@ class EngineInfo:
     """一个引擎能做什么。
 
     languages 只有 "auto" 时表示该引擎不接受语言参数，由它自行判断；
-    models 列出可用模型，提交任务时只接受其中的值。
+    models 列出可用模型，提交任务时只接受其中的值；
+    enhance 表示提交任务时可以要求先降噪、去混响，由服务按自己是否带着增强模型填写。
     """
     name: str
     models: tuple[str, ...]
     default_model: str
     languages: tuple[str, ...]
     diarization: bool
+    enhance: bool = False
 
     def as_dict(self):
         return {"name": self.name, "models": list(self.models), "default_model": self.default_model,
-                "languages": list(self.languages), "diarization": self.diarization}
+                "languages": list(self.languages), "diarization": self.diarization, "enhance": self.enhance}

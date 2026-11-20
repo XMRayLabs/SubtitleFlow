@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 
-from subtitleflow import gui, transcribe_page, transcriber_install, transcription
+from subtitleflow import gui, srt, transcribe_page, transcriber_install, transcription
 from subtitleflow.transcription import ServiceManager
 
 app = QApplication.instance() or QApplication([])
@@ -118,11 +118,59 @@ class TranscribePageTests(WindowTestCase):
         self.assertEqual(self.page.engine.currentText(), "fake")
         self.assertEqual([self.page.language.itemData(i) for i in range(self.page.language.count())],
                          ["auto", "zh", "en"])
-        # 只有一个模型时不占界面，提交时仍然用它
+        # 只有一个模型时不占界面，提交时仍然用它；固定取值写成文字，这一行不会只剩一个标题
         self.assertTrue(self.page.model.isHidden())
+        self.assertEqual(self.page.engine_summary.text(), "fake")
+        self.assertFalse(self.page.engine_summary.isHidden())
         self.page.language.setCurrentIndex(2)
         self.assertEqual(self.page.choice(), {"engine": "fake", "model": "fake", "language": "en"})
         self.assertEqual(self.page.settings()["language"], "en")
+
+    def test_enhance_switch_is_off_by_default_and_remembered(self):
+        self.page.load_engines()
+        self.wait_for(lambda: bool(self.page.engine_infos))
+        self.assertFalse(self.page.enhance_row.isHidden())
+        self.assertFalse(self.page.enhance.isChecked())
+        self.assertFalse(self.page.wants_enhance())
+        self.page.enhance.setChecked(True)
+        self.assertTrue(self.page.wants_enhance())
+        self.assertIs(self.page.settings()["enhance"], True)
+        self.page.apply_settings({})
+        self.assertFalse(self.page.enhance.isChecked())
+        self.page.apply_settings({"enhance": True})
+        self.assertTrue(self.page.enhance.isChecked())
+
+    def test_enhance_switch_is_hidden_for_services_that_cannot_enhance(self):
+        # 旧版服务不公布 enhance：即使上次勾选过，也不显示开关、不发给服务
+        self.page.apply_settings({"enhance": True})
+        self.page.show_engines(self.window.transcription_service,
+                               [{"name": "moss", "models": ["moss"], "languages": ["auto"]}])
+        self.assertTrue(self.page.enhance_row.isHidden())
+        self.assertFalse(self.page.wants_enhance())
+        # 设置保留，换回支持的服务后仍然生效
+        self.assertIs(self.page.settings()["enhance"], True)
+
+    def test_start_with_enhance_on_writes_enhanced_subtitles(self):
+        self.page.load_engines()
+        self.wait_for(lambda: bool(self.page.engine_infos))
+        source = Path(self.data.name) / "noisy.wav"
+        source.write_text(json.dumps({"duration": 60}), encoding="utf-8")
+        self.page.add_files([str(source)])
+        self.page.enhance.setChecked(True)
+        self.page.start_button.click()
+        self.wait_idle()
+        self.assertEqual(self.page.table.item(0, 1).text(), "已完成")
+        self.assertEqual(srt.read(Path(self.data.name) / "noisy.srt")[0].text, "第1段（已增强）")
+
+    def test_fully_fixed_engine_is_described_instead_of_leaving_the_row_blank(self):
+        # MOSS 只有一个引擎、一个模型、只能自动识别语言：没有可选项，但要显示在用什么
+        moss = {"name": "moss", "models": ["OpenMOSS-Team/MOSS-Transcribe-Diarize"],
+                "default_model": "OpenMOSS-Team/MOSS-Transcribe-Diarize", "languages": ["auto"]}
+        self.page.show_engines(self.window.transcription_service, [moss])
+        for widget in (self.page.engine, self.page.model, self.page.language):
+            self.assertTrue(widget.isHidden())
+        self.assertEqual(self.page.engine_summary.text(), "MOSS-Transcribe-Diarize · 自动识别语言")
+        self.assertEqual(self.page.choice(), {"engine": "moss", "model": moss["models"][0], "language": "auto"})
 
     def test_engines_from_a_replaced_service_are_discarded(self):
         # 查询在后台线程里跑，期间服务可能被装上、卸掉或换掉；迟到的结果不能套用到新服务上，
@@ -148,6 +196,27 @@ class TranscribePageTests(WindowTestCase):
             path.write_text("{}", encoding="utf-8")
         self.page.add_files([str(media), str(other), str(media)])
         self.assertEqual(self.page.paths, [media.resolve()])
+
+    def test_remove_button_drops_only_its_own_row(self):
+        paths = [Path(self.data.name) / name for name in ("a.mp3", "b.mp3", "c.mp3")]
+        for path in paths:
+            path.write_text("{}", encoding="utf-8")
+        self.page.add_files([str(p) for p in paths])
+        self.page.outputs = {0: Path("a.srt"), 2: Path("c.srt")}
+        self.page.last_output_row = 2
+        self.page.table.cellWidget(0, 3).click()
+        self.assertEqual(self.page.paths, [paths[1].resolve(), paths[2].resolve()])
+        self.assertEqual([self.page.table.item(i, 0).text() for i in range(2)], ["b.mp3", "c.mp3"])
+        # 后面的行前移后，保存位置仍对应原来的文件
+        self.assertEqual(self.page.outputs, {1: Path("c.srt")})
+        self.assertEqual(self.page.last_output_row, 1)
+        self.assertTrue(paths[0].exists(), "移除只是从列表拿掉，不删除文件")
+        # 行号变了之后，按钮仍然移除它自己那一行
+        self.page.table.cellWidget(1, 3).click()
+        self.assertEqual(self.page.paths, [paths[1].resolve()])
+        self.page.table.cellWidget(0, 3).click()
+        self.assertEqual(self.page.table.rowCount(), 0)
+        self.assertEqual(self.page.file_count.text(), "0 个文件")
 
     def test_start_transcribes_files_to_srt_beside_source(self):
         source = Path(self.data.name) / "talk.wav"

@@ -2,6 +2,7 @@
 
 假源文件是一个 JSON 文件，例如 {"duration": 700, "silences": [[299, 301]]}；
 可选字段 "fail" 让模型报错，"delay" 让每个转录分段耗时若干秒（用于取消测试）。
+经过假增强的分段，字幕文字后面带「（已增强）」。
 不是 JSON 的文件按 30 秒、无静音处理，方便用任意文件做界面联调。
 """
 import json
@@ -21,9 +22,36 @@ class FakeMedia:
         spec["_count"] = 0
         return spec, float(spec["duration"]), [tuple(s) for s in spec.get("silences", [])]
 
-    def clip(self, spec, segment):
+    def clip(self, spec, segment, enhance=None):
         spec["_count"] += 1
-        return {**spec, "index": spec["_count"], "length": segment.end - segment.start}
+        clip = {**spec, "index": spec["_count"], "length": segment.end - segment.start}
+        return enhance(clip) if enhance else clip
+
+
+class FakeEnhancer:
+    """第一次使用前要"下载" download_size 字节，之后直接可用。"""
+
+    def __init__(self, download_size=3):
+        self.download_size, self.downloaded, self.loaded = download_size, False, False
+
+    def missing_bytes(self):
+        return 0 if self.downloaded else self.download_size
+
+    def download(self, on_progress, should_stop):
+        for done in range(1, self.download_size + 1):
+            if should_stop():
+                return
+            on_progress(done)
+        self.downloaded = True
+
+    def load(self):
+        self.loaded = True
+
+    def unload(self):
+        self.loaded = False
+
+    def enhance(self, clip, should_stop):
+        return {**clip, "enhanced": True}
 
 
 class FakeEngine:
@@ -51,4 +79,4 @@ class FakeEngine:
             time.sleep(0.01)
         length = clip["length"]
         on_progress(length)
-        return [Cue(0, round(length * 1000), f"第{clip['index']}段")]
+        return [Cue(0, round(length * 1000), f"第{clip['index']}段" + ("（已增强）" if clip.get("enhanced") else ""))]

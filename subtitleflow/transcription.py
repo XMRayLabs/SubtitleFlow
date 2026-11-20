@@ -83,10 +83,11 @@ class ServiceClient:
         """服务实际能运行的引擎；界面据此渲染选项，不内置各引擎的知识。"""
         return self.request("GET", "/v1/engines")["engines"]
 
-    def submit(self, path, segment_seconds, engine=None, model=None, language=None):
+    def submit(self, path, segment_seconds, engine=None, model=None, language=None, enhance=False):
         # 省略的参数不发给服务，由引擎取默认值；发出去的值服务会校验，无效时返回 400
         body = {"path": str(path), "segment_seconds": segment_seconds}
-        body.update({k: v for k, v in (("engine", engine), ("model", model), ("language", language)) if v})
+        body.update({k: v for k, v in (("engine", engine), ("model", model), ("language", language),
+                                       ("enhance", enhance)) if v})
         return self.request("POST", "/v1/jobs", body)
 
     def status(self, job_id):
@@ -182,9 +183,14 @@ def describe(status) -> str:
     """把服务返回的任务状态变成"进度·说明"一栏的文字。"""
     if status["status"] == "queued":
         return "排队中"
+    if status["status"] == "downloading":
+        return (f"首次使用，正在下载降噪与去混响模型 {status['downloaded'] / 1024 ** 3:.2f} GB"
+                f" / {status['download_size'] / 1024 ** 3:.2f} GB")
     if status["status"] == "loading":
         return "正在加载模型…"
     if status["status"] == "running":
+        if status.get("enhancing"):
+            return f"分段 {status['segment']}/{status['segments']} · 正在降噪与去混响"
         return (f"分段 {status['segment']}/{status['segments']} · "
                 f"已转写到 {fmt_time(status['position'])} / {fmt_time(status['duration'])}")
     return status.get("error", "")
@@ -236,11 +242,11 @@ class TranscribeJob:
 
     def __init__(self, paths, segment_seconds, service: ServiceManager, cancel: threading.Event,
                  event=lambda *args: None, poll_interval=0.3, fallback_dirs=None,
-                 engine=None, model=None, language=None):
+                 engine=None, model=None, language=None, enhance=False):
         self.paths = [Path(p) for p in paths]
         self.segment_seconds, self.service, self.cancel = segment_seconds, service, cancel
         self.event, self.poll_interval = event, poll_interval
-        self.engine, self.model, self.language = engine, model, language
+        self.engine, self.model, self.language, self.enhance = engine, model, language, enhance
         self.fallback_dirs = default_fallback_dirs() if fallback_dirs is None else fallback_dirs
 
     def run(self):
@@ -259,7 +265,7 @@ class TranscribeJob:
         try:
             self.event("file", index, "处理中", "正在启动转录服务…")
             client = self.service.ensure()
-            job_id = client.submit(path, self.segment_seconds, self.engine, self.model, self.language)["id"]
+            job_id = client.submit(path, self.segment_seconds, self.engine, self.model, self.language, self.enhance)["id"]
             cancel_sent = False
             while True:
                 if self.cancel.is_set() and not cancel_sent:

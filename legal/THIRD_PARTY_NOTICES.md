@@ -15,6 +15,10 @@
 - Windows 安装使用系统 IExpress；macOS 使用系统 hdiutil/pkgbuild，不复制这些构建工具到应用。
 - GitHub Actions 仅用于构建，不随应用打包。
 
+转录服务（单独下载，不随主程序安装包分发）：
+- transcriber/roformer.py 改写自 ZFTurbo/Music-Source-Separation-Training 的 Mel-Band RoFormer 实现（MIT，Copyright (c) 2024 Roman Solovyev），后者源自 lucidrains/BS-RoFormer（MIT，Copyright (c) 2023 Phil Wang）；发布转录服务时须附这两份 MIT 许可原文。
+- 降噪与去混响的模型权重不随任何安装包分发，由用户打开该选项后从原发布地址下载到本机：去混响为 anvuew/dereverb_mel_band_roformer（GPL-3.0）；降噪为 aufr33 的 denoise_mel_band_roformer（经 python-audio-separator 的发布页下载，原作者未声明许可）。如改为由项目自行托管或打包这些权重，须先重新审核许可。
+
 许可元数据和版本锁定本身不等于完成分发审核。运行 tools/collect_licenses.py 生成实际环境清单和许可副本；正式发布还必须通过 tools/release_gate.py 的实际安装内容审核。
 
 UI 使用系统字体，无捆绑字体或第三方图片素材。应用图标由项目内原创 Qt 绘图代码生成，不使用 PyInstaller 默认图标或第三方素材。

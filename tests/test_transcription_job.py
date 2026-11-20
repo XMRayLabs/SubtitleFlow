@@ -49,6 +49,13 @@ class TranscribeJobTests(unittest.TestCase):
                                engine="fake", model="fake", language="en").run()
         self.assertEqual(status, "done")
 
+    def test_enhancement_is_requested_only_when_turned_on(self):
+        source = self.source("talk.wav", duration=60)
+        TranscribeJob([source], 300, self.service, threading.Event(), enhance=True).run()
+        self.assertEqual(srt.read(self.dir / "talk.srt")[0].text, "第1段（已增强）")
+        TranscribeJob([source], 300, self.service, threading.Event()).run()
+        self.assertEqual(srt.read(self.dir / "talk (1).srt")[0].text, "第1段")
+
     def test_unsupported_language_fails_the_file_instead_of_falling_back(self):
         source = self.source("talk.wav", duration=60)
         events = []
@@ -122,6 +129,17 @@ class TranscribeJobTests(unittest.TestCase):
         self.assertEqual(status, "partial")
         self.assertIn(("incompatible",), events)
         self.assertTrue(any(e[:3] == ("file", 0, "失败") and "更新转录服务" in e[3] for e in events))
+
+
+class DescribeTests(unittest.TestCase):
+    def test_enhancement_steps_are_shown_to_the_user(self):
+        from subtitleflow.transcription import describe
+        downloading = {"status": "downloading", "downloaded": 1024 ** 3 // 2, "download_size": 2 * 1024 ** 3}
+        self.assertIn("正在下载降噪与去混响模型 0.50 GB / 2.00 GB", describe(downloading))
+        running = {"status": "running", "segment": 2, "segments": 3, "position": 300, "duration": 700}
+        self.assertEqual(describe({**running, "enhancing": True}), "分段 2/3 · 正在降噪与去混响")
+        # 旧版服务不返回 enhancing，照旧显示转写进度
+        self.assertIn("已转写到", describe(running))
 
 
 class SaveSrtTests(unittest.TestCase):

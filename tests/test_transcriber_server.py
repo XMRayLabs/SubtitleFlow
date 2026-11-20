@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 
 from transcriber import API_VERSION
-from transcriber.fakes import FakeEngine, FakeMedia
+from transcriber.fakes import FakeEngine, FakeEnhancer, FakeMedia
 from transcriber.server import create_server
 from transcriber.service import TranscriptionService
 
@@ -35,7 +35,7 @@ class ServerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.server = create_server(TranscriptionService(FakeEngine(), FakeMedia()), TOKEN)
+        self.server = create_server(TranscriptionService(FakeEngine(), FakeMedia(), enhancer=FakeEnhancer()), TOKEN)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
@@ -111,6 +111,32 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(status, 400, extra)
             self.assertIn(expected, body["error"])
 
+    def test_enhancement_is_advertised_and_off_unless_asked_for(self):
+        _, body = request(self.base, "GET", "/v1/engines")
+        self.assertIs(body["engines"][0]["enhance"], True)
+        _, body = request(self.base, "POST", "/v1/jobs", {"path": self.media(duration=60), "segment_seconds": 300})
+        self.assertIs(body["enhance"], False)
+        self.wait(body["id"])
+        self.assertEqual(request(self.base, "GET", f"/v1/jobs/{body['id']}/result")[1]["cues"][0]["text"], "第1段")
+
+    def test_enhanced_job_downloads_models_once_then_enhances_every_segment(self):
+        source = self.media(duration=700, silences=[[299, 301]])
+        _, body = request(self.base, "POST", "/v1/jobs", {"path": source, "segment_seconds": 300, "enhance": True})
+        final = self.wait(body["id"])
+        self.assertEqual(final["status"], "done")
+        self.assertEqual((final["downloaded"], final["download_size"]), (3, 3))
+        _, result = request(self.base, "GET", f"/v1/jobs/{body['id']}/result")
+        self.assertEqual([c["text"] for c in result["cues"]], ["第1段（已增强）", "第2段（已增强）"])
+        # 模型已就绪，第二个任务不再下载
+        _, body = request(self.base, "POST", "/v1/jobs", {"path": source, "segment_seconds": 300, "enhance": True})
+        self.assertEqual(self.wait(body["id"])["download_size"], 0)
+
+    def test_enhance_must_be_a_boolean(self):
+        status, body = request(self.base, "POST", "/v1/jobs",
+                               {"path": self.media(duration=60), "segment_seconds": 300, "enhance": "yes"})
+        self.assertEqual(status, 400)
+        self.assertIn("enhance", body["error"])
+
     def test_missing_source_file_is_rejected(self):
         status, body = request(self.base, "POST", "/v1/jobs", {"path": str(Path(self.tmp.name) / "none.wav"), "segment_seconds": 300})
         self.assertEqual(status, 400)
@@ -138,20 +164,55 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.wait(body["id"])["status"], "done")
 
 
+class WithoutEnhancerTests(unittest.TestCase):
+    def test_enhancement_is_neither_advertised_nor_accepted(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        source = Path(tmp.name) / "a.wav"
+        source.write_text(json.dumps({"duration": 60}), encoding="utf-8")
+        service = TranscriptionService(FakeEngine(), FakeMedia())
+        self.assertIs(service.engines()[0].enhance, False)
+        with self.assertRaisesRegex(ValueError, "不支持降噪"):
+            service.submit(str(source), 300, enhance=True)
+        job = service.submit(str(source), 300, enhance=False)
+        self.assertIs(job.enhance, False)
+        while job.status != "done":
+            time.sleep(0.01)
+
+
+class CancelDuringDownloadTests(unittest.TestCase):
+    def test_cancel_while_downloading_models_cancels_the_job(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        source = Path(tmp.name) / "a.wav"
+        source.write_text(json.dumps({"duration": 60}), encoding="utf-8")
+        enhancer = FakeEnhancer(download_size=10 ** 9)
+        service = TranscriptionService(FakeEngine(), FakeMedia(), enhancer=enhancer)
+        job = service.submit(str(source), 300, enhance=True)
+        while job.status != "downloading":
+            time.sleep(0.001)
+        service.cancel(job.id)
+        while job.status == "downloading":
+            time.sleep(0.01)
+        self.assertEqual(job.status, "cancelled")
+        self.assertFalse(enhancer.loaded)
+
+
 class IdleUnloadTests(unittest.TestCase):
     def test_model_is_unloaded_after_idle_period_and_reloaded_on_demand(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         source = Path(tmp.name) / "a.wav"
         source.write_text(json.dumps({"duration": 60}), encoding="utf-8")
-        engine = FakeEngine()
-        service = TranscriptionService(engine, FakeMedia(), idle_unload_seconds=0.3)
-        job = service.submit(str(source), 300)
+        engine, enhancer = FakeEngine(), FakeEnhancer()
+        service = TranscriptionService(engine, FakeMedia(), idle_unload_seconds=0.3, enhancer=enhancer)
+        job = service.submit(str(source), 300, enhance=True)
         while job.status != "done":
             time.sleep(0.01)
-        self.assertTrue(engine.loaded)
+        self.assertTrue(engine.loaded and enhancer.loaded)
         time.sleep(1.5)
-        self.assertFalse(engine.loaded)
+        # 增强模型同样占显存，空闲时一起卸载
+        self.assertFalse(engine.loaded or enhancer.loaded)
         again = service.submit(str(source), 300)
         while again.status != "done":
             time.sleep(0.01)

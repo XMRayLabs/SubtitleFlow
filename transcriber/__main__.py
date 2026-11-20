@@ -34,12 +34,23 @@ def wait_for_exit(pid):
 
 def build_service(args):
     if args.engine == "fake":
-        from .fakes import FakeEngine, FakeMedia
-        return TranscriptionService(FakeEngine(), FakeMedia(), args.idle_unload)
+        from .fakes import FakeEngine, FakeEnhancer, FakeMedia
+        return TranscriptionService(FakeEngine(), FakeMedia(), args.idle_unload, FakeEnhancer())
     # 这里只创建对象；torch 等重型依赖到第一次转录加载模型时才导入
     from .engine import MossEngine, MODEL_ID
+    from .enhance import Enhancer
     from .media import FfmpegMedia
-    return TranscriptionService(MossEngine(args.model or MODEL_ID), FfmpegMedia(args.ffmpeg), args.idle_unload)
+    return TranscriptionService(MossEngine(args.model or MODEL_ID), FfmpegMedia(args.ffmpeg), args.idle_unload,
+                                Enhancer(args.enhance_dir or default_enhance_dir(args.model)))
+
+
+def default_enhance_dir(model):
+    """增强模型的存放位置。安装版的模型在 transcriber/models/<revision>，增强模型放在 transcriber/enhance：
+    更新时安装器会删掉 models 下旧 revision 的目录，放在它下面会被一起删掉；卸载时随 transcriber 一起删除。"""
+    if model and Path(model).is_dir():
+        return Path(model).resolve().parent.parent / "enhance"
+    local = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".cache")
+    return Path(local) / "SubtitleFlow" / "enhance"
 
 
 def default_ffmpeg():
@@ -55,6 +66,7 @@ def parser():
     result = argparse.ArgumentParser(prog="transcriber", description="SubtitleFlow 转录服务")
     result.add_argument("--engine", choices=("moss", "fake"), default="moss")
     result.add_argument("--model", help="模型目录或 HuggingFace 模型 ID（默认在线模型）")
+    result.add_argument("--enhance-dir", help="降噪与去混响模型的存放目录（默认放在模型目录旁，首次使用时下载）")
     result.add_argument("--ffmpeg", default=default_ffmpeg(), help="ffmpeg 可执行文件路径")
     result.add_argument("--parent-pid", type=int, help="主程序进程号，它退出后服务随之退出")
     result.add_argument("--idle-unload", type=float, default=600, help="空闲多少秒后卸载模型（默认 600）")
