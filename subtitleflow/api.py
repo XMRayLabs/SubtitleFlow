@@ -2,17 +2,14 @@
 from dataclasses import dataclass, field, replace
 import json
 import ipaddress
+import re
 import ssl
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from .safety import ResponseTimeout, response_json
-
-
-class Cancelled(Exception):
-    pass
+from .safety import Cancelled, ResponseTimeout, response_json
 
 
 class APIError(Exception):
@@ -27,12 +24,16 @@ class InvalidResponse(APIError):
     pass
 
 
+class RequestTimeout(APIError):
+    """模型在超时时间内没有答完。调用方可以把一批拆小再试，而不是让整个文件失败。"""
+
+
 @dataclass(frozen=True)
 class APIConfig:
     base_url: str
     key: str = field(repr=False)
     model: str = ""
-    timeout: float = 60.0
+    timeout: float | None = None     # 请求超时秒数；None 表示按地址自动选择，见 request_timeout()
 
     allow_local_self_signed: bool = False
 
@@ -58,6 +59,12 @@ class APIConfig:
         except ValueError:
             return False
 
+    def request_timeout(self):
+        """本机模型一般跑在普通显卡上，一批 20 条常要几十秒到几分钟，默认给 300 秒；云端 API 给 60 秒。"""
+        if self.timeout:
+            return self.timeout
+        return 300.0 if self.is_loopback() else 60.0
+
     def endpoint(self):
         base = self.base()
         if not self.model.strip():
@@ -66,6 +73,39 @@ class APIConfig:
 
     def models_endpoint(self):
         return self.base() + "/models"
+
+
+_NO_JSON = object()
+_THINK = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.S | re.I)
+# 有些服务把开头的 <think> 吃掉，只留下结尾标签；那之前的都是思考过程
+_THINK_TAIL = re.compile(r"^.*</(?:think|thinking|reasoning)>", re.S | re.I)
+_FENCE = re.compile(r"```[A-Za-z0-9_-]*\s*\n(.*?)```", re.S)
+
+
+def extract_json(text):
+    """从模型回复里取出 JSON：先去掉推理过程，再依次尝试整段、代码围栏、正文里最长的那段 JSON。
+    推理模型常在 JSON 前后加思考过程或说明，只认“整段就是 JSON”会让整个文件失败；
+    说明里也常有 [1] 这类引用，取“第一个能解析的”会把它当成答案，所以取最长的。"""
+    text = _THINK_TAIL.sub("", _THINK.sub("", text)).strip()
+    candidates = [text, *(m.strip() for m in _FENCE.findall(text))]
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except (ValueError, TypeError):
+            pass
+    decoder = json.JSONDecoder()
+    best, longest, end = _NO_JSON, -1, 0
+    for match in re.finditer(r"[\[{]", text):
+        if match.start() < end:          # 在上一段 JSON 里面，不单独算
+            continue
+        try:
+            value, stop = decoder.raw_decode(text, match.start())
+        except ValueError:
+            continue
+        end = stop
+        if stop - match.start() > longest:
+            best, longest = value, stop - match.start()
+    return best
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -134,7 +174,7 @@ class Client:
             headers["Authorization"] = "Bearer " + self.config.key
         try:
             request = urllib.request.Request(url, headers=headers)
-            with self.opener().open(request, timeout=min(self.config.timeout, 20)) as response:
+            with self.opener().open(request, timeout=min(self.config.request_timeout(), 20)) as response:
                 data = response_json(response, self.cancel)
             self.check()
         except urllib.error.HTTPError as exc:
@@ -161,25 +201,29 @@ class Client:
             raise InvalidResponse("服务返回空模型列表，可手动填写模型名称")
         return ids
 
-    def chat(self, system: str, content: str):
+    def chat(self, system: str, content: str, max_tokens: int | None = None):
         raw = self.config.base_url.strip().rstrip("/")
         if self.config.is_loopback() and not urllib.parse.urlsplit(raw).path.rstrip("/"):
             self.config = replace(self.config, base_url=self.discover_base())
         url = self.config.endpoint()
-        payload = json.dumps({"model": self.config.model, "messages": [
+        request_body = {"model": self.config.model, "messages": [
             {"role": "system", "content": system}, {"role": "user", "content": content}
-        ]}, ensure_ascii=False).encode("utf-8")
+        ]}
+        if max_tokens:
+            request_body["max_tokens"] = max_tokens
+        payload = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self.config.key:
             headers["Authorization"] = "Bearer " + self.config.key
+        timeout, timeouts = self.config.request_timeout(), 0
         for attempt in range(4):
             self.check()
             self.on_event({"type": "request", "attempt": attempt + 1})
             started = time.monotonic()
             try:
                 request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-                with self.opener().open(request, timeout=self.config.timeout) as response:
-                    data = response_json(response, self.cancel)
+                with self.opener().open(request, timeout=timeout) as response:
+                    data = response_json(response, self.cancel, timeout)
                 self.check()
                 self.on_event({"type": "answer", "attempt": attempt + 1,
                                "elapsed": round(time.monotonic() - started, 1)})
@@ -207,14 +251,24 @@ class Client:
                 cause = f"HTTP {code}"
             except ResponseTimeout:
                 # 正文迟迟读不完和连接超时是一回事；以前落进下面的 ValueError，被误报成格式错误。
-                if attempt == 3:
-                    raise APIError("模型响应超时，重试 3 次后仍未完成；可减小每批条目数") from None
+                timeouts += 1
+                if timeouts == 2:
+                    raise self.timed_out(timeout) from None
                 delay, cause = 2 ** attempt, "响应超时"
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
-                if isinstance(reason, (ssl.SSLError, ConnectionRefusedError)) or attempt == 3:
+                if isinstance(reason, (ssl.SSLError, ConnectionRefusedError)):
                     raise self.connection_error(exc) from None
-                delay, cause = 2 ** attempt, "请求超时或连接中断"
+                if isinstance(reason, TimeoutError):
+                    # 超时只再试一次：本地服务在连接断开后往往还在算旧请求，连发只会排得更久
+                    timeouts += 1
+                    if timeouts == 2:
+                        raise self.timed_out(timeout) from None
+                    delay, cause = 2 ** attempt, "请求超时"
+                else:
+                    if attempt == 3:
+                        raise self.connection_error(exc) from None
+                    delay, cause = 2 ** attempt, "连接中断"
             except (KeyError, IndexError, TypeError, ValueError):
                 raise InvalidResponse("API 响应不是兼容的聊天结果") from None
             if attempt == 3:
@@ -223,15 +277,18 @@ class Client:
             if self.cancel.wait(delay):
                 raise Cancelled("任务已取消")
 
+    @staticmethod
+    def timed_out(timeout):
+        return RequestTimeout(f"模型响应超时：{timeout:g} 秒内没有完成（已重试 1 次）；"
+                              "可在翻译设置里调长请求超时，或减小每批字幕数")
+
     def json_chat(self, system: str, content: str):
-        raw = self.chat(system, content).strip()
-        if raw.startswith("```"):
-            lines = raw.splitlines()
-            raw = "\n".join(lines[1:-1])
-        try:
-            return json.loads(raw)
-        except (ValueError, TypeError):
-            raise InvalidResponse("模型返回了无效 JSON") from None
+        # 给回复长度设上限：正常译文远短于它；模型复读停不下来时，很快以“输出被截断”收场，
+        # 调用方再拆小或保留原文，而不是一直生成到超时。2048 留给推理模型的思考过程。
+        value = extract_json(self.chat(system, content, max_tokens=2048 + 4 * len(content)))
+        if value is _NO_JSON:
+            raise InvalidResponse("模型返回了无效 JSON")
+        return value
 
     def test(self):
         return self.chat("Reply with OK.", "Connection test")

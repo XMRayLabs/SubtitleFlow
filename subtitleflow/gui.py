@@ -4,8 +4,8 @@ from pathlib import Path
 import sys
 import threading
 
-from PySide6.QtCore import QStandardPaths, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QStandardPaths, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QFileDialog, QTableWidgetItem, QMessageBox,
 )
@@ -13,7 +13,7 @@ from . import __version__
 from .api import APIConfig, Client
 from .jobs import Job, JobOptions
 from .merge import MergeOptions
-from .progress_view import ProgressDelegate, RowProgress, overall
+from .progress_view import DetailDelegate, DetailPanel, ProgressDelegate, RowProgress, overall
 from . import updates
 from .safety import safe_tree, read_json
 from .widgets import FileTable, Worker
@@ -63,6 +63,8 @@ class Window(QMainWindow):
         self.progress_timer = QTimer(self)
         self.progress_timer.setInterval(1000)
         self.progress_timer.timeout.connect(self.tick_progress)
+        # 列宽变化时，展开的详情面板按新宽度重新折行、调整高度
+        self.table.horizontalHeader().sectionResized.connect(self.refresh_details)
         self.engines_loaded.connect(self.transcribe_page.show_engines)
         if load_preferences:
             self.load_settings()
@@ -189,16 +191,17 @@ class Window(QMainWindow):
         self.advanced_button.setVisible(merging)
         if not merging:
             self.advanced.hide()
-        self.export_xml.setVisible(mode != "fcpxml")
+        self.export_xml.setVisible(mode not in ("fcpxml", "clean"))
         self.number_translated.setVisible(mode in ("translate", "both"))
-        xml = mode == "fcpxml" or self.export_xml.isChecked()
+        xml = mode == "fcpxml" or (mode != "clean" and self.export_xml.isChecked())
         self.fps.setVisible(xml)
         self.fps_label.setVisible(xml)
         self.mode_note.setText({
             "both": "先合并完整句子，再翻译为简体中文。",
             "merge": "完整句子优先，保留原文与时间轴。无需翻译服务。",
             "translate": "保留每条字幕的时间轴，翻译为简体中文。",
-            "fcpxml": "转换为 Final Cut Pro 可编辑标题，无需翻译服务。"
+            "fcpxml": "转换为 Final Cut Pro 可编辑标题，无需翻译服务。",
+            "clean": "去掉乱码字符，删除语音识别产生的乱码条目，另附清理报告供核对。无需翻译服务。",
         }[mode])
 
     def busy(self):
@@ -229,12 +232,7 @@ class Window(QMainWindow):
                 self.last_root = None
                 self.retry_button.setEnabled(False)
                 self.paths.append(path)
-                row = self.table.rowCount()
-                self.table.insertRow(row)
-                for col, text in enumerate((path.name, "等待", "")):
-                    self.table.setItem(row, col, QTableWidgetItem(text))
-                self.row_progress.append(RowProgress())
-                self.refresh_row(row)
+                self.add_row((path.name, "等待", ""), RowProgress())
         self.file_count.setText(f"{len(self.paths)} 个文件")
         self.status.setText(f"已添加 {len(self.paths)} 个 SRT 文件")
         self.table.viewport().update()
@@ -256,19 +254,20 @@ class Window(QMainWindow):
             self.output.setText(directory)
 
     def api_config(self):
-        return APIConfig(self.base.text().strip(), self.key.text(), self.model.currentText().strip(), allow_local_self_signed=self.local_cert.isChecked())
+        return APIConfig(self.base.text().strip(), self.key.text(), self.model.currentText().strip(),
+                         timeout=self.timeout.value() or None, allow_local_self_signed=self.local_cert.isChecked())
 
     def options(self):
         return JobOptions(self.mode.currentData(),
                           MergeOptions(self.target.value(), self.silence.value(), self.tolerance.value()),
-                          self.batch.value(), self.ai.isChecked() and self.mode.currentData() not in ("translate", "fcpxml"),
+                          self.batch.value(), self.ai.isChecked() and self.mode.currentData() in ("merge", "both"),
                           self.export_xml.isChecked(), self.fps.currentText(),
                           self.number_translated.isChecked() and self.mode.currentData() in ("translate", "both"))
 
     def save_settings(self):
         data = {"base": self.base.text(), "model": self.model.currentText(), "output": self.output.text(),
                 "repo": self.repo.text().strip(), "remember": self.remember.isChecked(),
-                "local_cert": self.local_cert.isChecked(), "page": self.page,
+                "local_cert": self.local_cert.isChecked(), "timeout": self.timeout.value(), "page": self.page,
                 "transcribe": self.transcribe_page.settings(), "transcriber_root": str(self.transcriber_root),
                 "options": asdict(self.options())}
         if self.remember.isChecked():
@@ -294,6 +293,7 @@ class Window(QMainWindow):
             self.repo.setText(data.get("repo") or updates.DEFAULT_REPO)
             self.model.setCurrentText(data.get("model", ""))
             self.local_cert.setChecked(data.get("local_cert", False))
+            self.timeout.setValue(int(data.get("timeout", 0) or 0))
             self.remember.setChecked(data.get("remember", False))
             self.apply_options(data.get("options", {}))
             self.transcribe_page.apply_settings(data.get("transcribe", {}))
@@ -367,9 +367,9 @@ class Window(QMainWindow):
             self.last_root = Path(values[0])
         elif kind == "file":
             row, status, detail = values
-            self.table.item(row, 1).setText(status)
+            self.table.item(2 * row, 1).setText(status)
             from PySide6.QtGui import QColor
-            self.table.item(row, 1).setForeground(QColor({"已完成": "#16856b", "失败": "#d14d61", "翻译中": "#5264e8", "处理中": "#5264e8", "AI 断句中": "#5264e8"}.get(status, "#7a8498")))
+            self.table.item(2 * row, 1).setForeground(QColor({"已完成": "#16856b", "失败": "#d14d61", "翻译中": "#5264e8", "处理中": "#5264e8", "AI 断句中": "#5264e8"}.get(status, "#7a8498")))
             progress = self.row_progress[row]
             if status == "处理中":
                 progress.start()
@@ -382,25 +382,67 @@ class Window(QMainWindow):
             self.refresh_row(row)
         elif kind == "activity":
             row, event = values
-            progress = self.row_progress[row]
-            progress.apply(event)
-            if event.get("type") in ("retry", "invalid", "split"):
-                self.status.setText(f"{self.table.item(row, 0).text()}：{progress.note}")
-            elif event.get("type") == "batch":
-                self.status.setText(f"正在{event.get('stage', '处理')} {self.table.item(row, 0).text()}")
+            # 重试、批次等只显示在该文件的进度格与详情面板里，不再重复写到底部状态栏
+            self.row_progress[row].apply(event)
             self.refresh_row(row)
         elif kind == "complete":
             self.status.setText({"done": "全部处理完成", "partial": "部分文件失败，可以重试未完成文件",
                                  "cancelled": "任务已取消，已完成结果已保留"}[values[0]])
 
+    def add_row(self, cells, progress):
+        """一个文件占表格两行：文件行（2i），紧跟一行跨三列的深色详情面板（2i+1），收起时隐藏。"""
+        index = len(self.row_progress)
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.insertRow(row + 1)
+        # 相邻文件交替底色，文件行与它的详情面板同色，一眼看出哪张卡片属于哪个字幕
+        tint = QColor("#ffffff" if index % 2 == 0 else "#f4f6fb")
+        for col, text in enumerate(cells):
+            item = QTableWidgetItem(text)
+            item.setBackground(tint)
+            self.table.setItem(row, col, item)
+        holder = QTableWidgetItem()
+        holder.setData(DetailDelegate.PANEL, True)
+        holder.setBackground(tint)
+        holder.setFlags(Qt.ItemIsEnabled)              # 面板行不能被选中
+        self.table.setItem(row + 1, 0, holder)
+        self.table.setSpan(row + 1, 0, 1, self.table.columnCount())
+        self.table.setCellWidget(row + 1, 0, DetailPanel())
+        self.table.setRowHidden(row + 1, True)
+        self.row_progress.append(progress)
+        self.refresh_row(index)
+
     def refresh_row(self, row):
         progress = self.row_progress[row]
-        item = self.table.item(row, 2)
+        item = self.table.item(2 * row, 2)
         text = progress.text()
         item.setText(text)
-        item.setToolTip(text)
+        item.setToolTip(f"{text}"+chr(10)+progress.current() if progress.current() and progress.state in ("running", "retry") else text)
         item.setData(ProgressDelegate.ROLE, (progress.fraction(), progress.color()))
+        self.refresh_detail(row)
         self.refresh_overall()
+
+    def toggle_detail(self, row):
+        item = self.table.item(2 * row, 0)
+        opened = not item.data(DetailDelegate.OPEN)
+        item.setData(DetailDelegate.OPEN, opened)
+        self.table.setRowHidden(2 * row + 1, not opened)
+        self.refresh_detail(row)
+
+    def detail_panel(self, row):
+        return self.table.cellWidget(2 * row + 1, 0)
+
+    def refresh_detail(self, row):
+        """展开的文件：更新下方面板的文字，并按面板内容设定那一行的高度；文件行本身不变。"""
+        if self.table.isRowHidden(2 * row + 1):
+            return
+        panel, progress = self.detail_panel(row), self.row_progress[row]
+        panel.set_rows(progress.detail_rows(), progress.color())
+        self.table.setRowHeight(2 * row + 1, panel.height_for())
+
+    def refresh_details(self, *args):
+        for row in range(len(self.row_progress)):
+            self.refresh_detail(row)
 
     def refresh_overall(self):
         value = overall(self.row_progress)
@@ -425,7 +467,7 @@ class Window(QMainWindow):
 
     def cancel_job(self):
         self.cancel.set()
-        self.status.setText("正在取消；进行中的网络请求最多等待 60 秒，已完成进度会保存")
+        self.status.setText(f"正在取消；进行中的网络请求最多等待 {self.api_config().request_timeout():g} 秒，已完成进度会保存")
 
     def restore(self):
         directory = QFileDialog.getExistingDirectory(self, "选择含 report.json 的任务目录")
@@ -446,17 +488,13 @@ class Window(QMainWindow):
                 if Path(name).name != name or ":" in name or "\\" in name:
                     raise ValueError("任务文件名不安全")
                 self.paths.append(root / "原始的srt" / name)
-                row = self.table.rowCount()
-                self.table.insertRow(row)
-                for col, text in enumerate((item["source"], "已完成" if item["status"] == "done" else "待重试", item.get("error", ""))):
-                    self.table.setItem(row, col, QTableWidgetItem(text))
                 progress = RowProgress()
                 if item["status"] == "done":
                     progress.finish("done")
                 else:
                     progress.note = item.get("error", "")
-                self.row_progress.append(progress)
-                self.refresh_row(row)
+                self.add_row((item["source"], "已完成" if item["status"] == "done" else "待重试", item.get("error", "")),
+                             progress)
             self.last_root = root
             self.file_count.setText(f"{len(self.paths)} 个文件")
             self.retry_button.show()

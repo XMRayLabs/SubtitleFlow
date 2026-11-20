@@ -59,6 +59,18 @@ class TranslateEventTests(unittest.TestCase):
         self.assertEqual([(e["batch"], e["batches"], e["first"], e["last"]) for e in batches],
                          [(1, 3, 0, 1), (2, 3, 2, 3), (3, 3, 4, 4)])
 
+    def test_row_and_status_show_which_cues_are_in_flight(self):
+        events = self.run_translate(ScriptedClient(), 5, 2)
+        row = RowProgress()
+        row.start()
+        row.progress("翻译", 0, 5)
+        row.apply([e for e in events if e["type"] == "batch"][1], now=0)
+        self.assertEqual(row.text(now=0), "翻译 0/5")          # 单元格只留进度
+        self.assertIn("第 2/3 批，第 3–4 条", row.detail(now=0))
+        self.assertIn("已完成 0/5 条", row.detail(now=0))
+        self.assertTrue(row.current().startswith("第 3–4 条（00:00:"))
+        self.assertIn(cue(2).text, row.current())
+
     def test_garbled_answer_is_reported_before_the_retry(self):
         client = ScriptedClient()
         client.bad_once = True
@@ -66,6 +78,94 @@ class TranslateEventTests(unittest.TestCase):
         kinds = [e["type"] for e in events]
         self.assertEqual(kinds, ["batch", "invalid"])
         self.assertIn("数量不匹配", events[1]["message"])
+
+    def test_a_cue_that_keeps_failing_is_isolated_and_left_untranslated(self):
+        class Stubborn(ScriptedClient):
+            def json_chat(self, system, content):
+                values = json.loads(content)
+                if any(v["id"] == 3 for v in values):
+                    return [{"id": v["id"], "text": "译文"} for v in values if v["id"] != 3]   # 总是漏掉第 3 条
+                return super().json_chat(system, content)
+        events = []
+        cues = [cue(i, f"line {i}") for i in range(40)]
+        with tempfile.TemporaryDirectory() as tmp:
+            result = translate(cues, Stubborn(), 8, Path(tmp) / "c.json", report=events.append)
+        self.assertEqual(result[3].text, "line 3")
+        self.assertTrue(all(c.text == "译文" for i, c in enumerate(result) if i != 3))
+        kept = [e for e in events if e["type"] == "kept"]
+        self.assertEqual([e["position"] for e in kept], [3])
+        self.assertIn("数量不匹配", kept[0]["message"])
+
+    def test_a_batch_that_times_out_is_split_into_shorter_requests(self):
+        from subtitleflow.api import RequestTimeout
+
+        class Slow(ScriptedClient):
+            def json_chat(self, system, content):
+                if len(json.loads(content)) > 5:
+                    raise RequestTimeout("模型响应超时")
+                return super().json_chat(system, content)
+        events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            result = translate([cue(i) for i in range(20)], Slow(), 20, Path(tmp) / "c.json", report=events.append)
+        self.assertTrue(all(c.text == "译文" for c in result))
+        self.assertIn({"type": "split", "sizes": [10, 10], "reason": "timeout"}, events)
+
+    def test_ai_boundaries_also_split_on_timeout(self):
+        from subtitleflow.api import RequestTimeout
+
+        class Slow(ScriptedClient):
+            def json_chat(self, system, content):
+                if len(json.loads(content)) > 8:
+                    raise RequestTimeout("模型响应超时")
+                return super().json_chat(system, content)
+        events = []
+        ai_boundaries([cue(i) for i in range(10)], Slow(), 10, report=events.append)
+        self.assertTrue(any(e.get("reason") == "timeout" for e in events if e["type"] == "split"))
+
+    def test_a_model_that_times_out_on_everything_still_fails_the_file(self):
+        from subtitleflow.api import RequestTimeout
+
+        class Stuck(ScriptedClient):
+            def json_chat(self, system, content):
+                raise RequestTimeout("模型响应超时")
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RequestTimeout, "始终无法翻译"):
+                translate([cue(i) for i in range(4)], Stuck(), 4, Path(tmp) / "c.json")
+
+    def test_a_cue_the_model_loops_on_keeps_its_original_text(self):
+        from subtitleflow.api import RequestTimeout, TooLarge
+        for error in (TooLarge, RequestTimeout):
+            class Looping(ScriptedClient):
+                def json_chat(self, system, content):
+                    if any(v["id"] == 5 for v in json.loads(content)):
+                        raise error("模型输出被截断")       # 复读停不下来：输出被截断或超时
+                    return super().json_chat(system, content)
+            events = []
+            with self.subTest(error=error.__name__), tempfile.TemporaryDirectory() as tmp:
+                result = translate([cue(i, f"line {i}") for i in range(40)], Looping(), 8,
+                                   Path(tmp) / "c.json", report=events.append)
+                self.assertEqual(result[5].text, "line 5")
+                self.assertEqual([e["position"] for e in events if e["type"] == "kept"], [5])
+
+    def test_long_runs_of_one_character_are_shortened_before_sending(self):
+        sent = []
+
+        class Recording(ScriptedClient):
+            def json_chat(self, system, content):
+                sent.extend(v["text"] for v in json.loads(content))
+                return super().json_chat(system, content)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = translate([cue(0, "มัย" + "ย" * 52 + "ไป"), cue(1, "ok!!!")], Recording(), 20, Path(tmp) / "c.json")
+        self.assertEqual(sent, ["มัยยยยไป", "ok!!!"])
+        self.assertEqual(result[0].start, 0)
+
+    def test_too_many_untranslatable_cues_still_fail_the_file(self):
+        class Broken(ScriptedClient):
+            def json_chat(self, system, content):
+                return "乱码"
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(InvalidResponse, "清理字幕"):
+                translate([cue(i) for i in range(40)], Broken(), 8, Path(tmp) / "c.json")
 
     def test_split_reports_both_halves(self):
         client = ScriptedClient()
@@ -168,7 +268,9 @@ class RowProgressTests(unittest.TestCase):
         row.progress("翻译", 40, 400)
         row.apply({"type": "batch", "batch": 3, "batches": 20}, now=0)
         row.apply({"type": "request", "attempt": 1}, now=100)
-        self.assertEqual(row.text(now=142), "翻译 40/400 · 第 3/20 批 · 请求中 42s")
+        self.assertEqual(row.text(now=142), "翻译 40/400")
+        self.assertIn("第 3/20 批", row.detail(now=142))
+        self.assertIn("请求中 42s", row.detail(now=142))
         self.assertEqual(row.color(), "#5264e8")
         self.assertAlmostEqual(row.fraction(), 0.1)
 
@@ -178,10 +280,11 @@ class RowProgressTests(unittest.TestCase):
         row.apply({"type": "batch", "batch": 1, "batches": 1}, now=0)
         row.apply({"type": "request", "attempt": 1}, now=0)
         row.apply({"type": "retry", "attempt": 1, "reason": "请求超时", "delay": 2}, now=60)
-        self.assertEqual(row.text(now=61), "翻译 0/10 · 第 1/1 批 · 第 1 次重试：请求超时（2s 后）")
+        self.assertEqual(row.text(now=61), "翻译 0/10 · 第 1 次重试：请求超时（2s 后）")
         self.assertEqual(row.color(), "#b7791f")
         row.apply({"type": "request", "attempt": 2}, now=62)
-        self.assertEqual(row.text(now=67), "翻译 0/10 · 第 1/1 批 · 请求中 5s（第 2 次尝试）")
+        self.assertEqual(row.text(now=67), "翻译 0/10")
+        self.assertIn("请求中 5s（第 2 次尝试）", row.detail(now=67))
         self.assertEqual(row.color(), "#b7791f")
 
     def test_garbled_and_split_notes(self):
@@ -190,6 +293,46 @@ class RowProgressTests(unittest.TestCase):
         self.assertEqual(row.text(now=0), "译文格式错误，重试中：译文条目数量不匹配")
         row.apply({"type": "split", "sizes": [10, 10]}, now=0)
         self.assertEqual(row.text(now=0), "输出过长，拆分为 10+10")
+
+    def test_retry_note_survives_the_request_that_follows_it(self):
+        row = RowProgress()
+        row.start()
+        row.apply({"type": "batch", "batch": 1, "batches": 3}, now=0)
+        row.apply({"type": "request", "attempt": 1}, now=0)
+        row.apply({"type": "invalid", "message": "译文条目数量不匹配"}, now=1)
+        row.apply({"type": "request", "attempt": 1}, now=1)
+        self.assertEqual(row.text(now=4), "译文格式错误，重试中：译文条目数量不匹配")
+        self.assertIn("请求中 3s", row.detail(now=4))
+        self.assertEqual(row.color(), "#b7791f")
+        row.progress("翻译", 20, 60)          # 这批成功：说明与琥珀色一起撤掉
+        self.assertNotIn("译文格式错误", row.text(now=5))
+        self.assertEqual(row.color(), "#5264e8")
+
+    def test_split_note_lasts_until_a_half_finishes(self):
+        row = RowProgress()
+        row.start()
+        row.apply({"type": "split", "sizes": [2, 2]}, now=0)
+        row.apply({"type": "request", "attempt": 1}, now=0)
+        self.assertIn("输出过长，拆分为 2+2", row.text(now=1))
+        row.progress("翻译", 2, 4)
+        self.assertNotIn("拆分", row.text(now=2))
+
+    def test_timeout_split_is_explained(self):
+        row = RowProgress()
+        row.apply({"type": "split", "sizes": [10, 10], "reason": "timeout"}, now=0)
+        self.assertEqual(row.text(now=0), "响应超时，拆分为 10+10")
+
+    def test_untranslated_cues_are_counted_on_the_row(self):
+        row = RowProgress()
+        row.start()
+        row.progress("翻译", 10, 40)
+        row.apply({"type": "kept", "position": 3, "message": "译文条目数量不匹配"}, now=0)
+        row.apply({"type": "kept", "position": 17, "message": "存在空译文"}, now=0)
+        self.assertIn("2 条保留原文", row.text(now=0))
+        self.assertIn(("保留原文", "第 4、18 条", "warn"), row.detail_rows(now=0))
+        row.progress("翻译", 40, 40)
+        row.finish("done")
+        self.assertEqual(row.text(), "40 条 · 2 条保留原文")
 
     def test_failure_keeps_partial_length(self):
         row = RowProgress()
@@ -232,7 +375,7 @@ class WindowProgressTests(unittest.TestCase):
             paths.append(str(path))
         self.window.add_files(paths)
 
-    def test_events_drive_row_bar_overall_bar_and_status(self):
+    def test_events_drive_row_bar_and_overall_bar(self):
         from subtitleflow.progress_view import ProgressDelegate
         w = self.window
         self.assertIsInstance(w.table.itemDelegateForColumn(2), ProgressDelegate)
@@ -240,14 +383,55 @@ class WindowProgressTests(unittest.TestCase):
         w.job_event(("file", 1, "翻译中", ""))
         w.job_event(("progress", 1, "翻译", 20, 40))
         w.job_event(("activity", 1, {"type": "batch", "batch": 2, "batches": 2, "stage": "翻译"}))
+        status = w.status.text()
         w.job_event(("activity", 1, {"type": "retry", "attempt": 1, "reason": "HTTP 503", "delay": 1, "stage": "翻译"}))
-        item = w.table.item(1, 2)
-        self.assertIn("第 2/2 批", item.text())
+        item = w.table.item(2, 2)                 # 第二个文件在表格第 2 行；第 1、3 行是各自的详情面板
+        self.assertIn("HTTP 503", item.text())
+        self.assertIn("第 2/2 批", w.row_progress[1].detail())
         self.assertEqual(item.data(ProgressDelegate.ROLE), (0.5, "#b7791f"))
         self.assertEqual(w.progress.value(), 750)
         self.assertEqual(w.progress_label.text(), "1/2 个文件 · 75%")
-        self.assertIn("b.srt", w.status.text())
-        self.assertIn("HTTP 503", w.status.text())
+        self.assertEqual(w.status.text(), status)  # 重试只显示在该文件上，不写到底部状态栏
+
+    def test_detail_panel_opens_below_its_file_without_changing_it(self):
+        w = self.window
+        w.resize(1080, 760)
+        base = w.table.rowHeight(2)
+        self.assertTrue(w.table.isRowHidden(3))
+        w.toggle_detail(1)                      # 点 b.srt 前面的 ▸
+        self.assertFalse(w.table.isRowHidden(3))
+        self.assertTrue(w.table.isRowHidden(1))           # a.srt 的面板仍收起
+        self.assertEqual(w.table.rowHeight(2), base)      # 文件行本身高度不变
+        self.assertEqual(w.table.item(2, 0).text(), "b.srt")
+        w.job_event(("file", 1, "翻译中", ""))
+        w.job_event(("progress", 1, "翻译", 20, 40))
+        w.job_event(("activity", 1, {"type": "batch", "batch": 2, "batches": 2, "first": 20, "last": 39,
+                                      "at": 61000, "preview": "hello", "stage": "翻译"}))
+        text = w.detail_panel(1).text()
+        self.assertIn("第 21–40 条", text)
+        self.assertIn("00:01:01", text)
+        self.assertIn("hello", text)
+        self.assertGreater(w.table.rowHeight(3), 40)
+        self.assertFalse(w.table.grab().isNull())
+        w.toggle_detail(1)                       # 收起
+        self.assertTrue(w.table.isRowHidden(3))
+
+    def test_request_timeout_setting_is_used_and_saved(self):
+        w = self.window
+        w.base.setText("https://127.0.0.1:8081/api")
+        self.assertIsNone(w.api_config().timeout)
+        self.assertEqual(w.api_config().request_timeout(), 300)
+        w.timeout.setValue(120)
+        self.assertEqual(w.api_config().request_timeout(), 120)
+        w.save_settings()
+        w.timeout.setValue(0)
+        w.load_settings()
+        self.assertEqual(w.timeout.value(), 120)
+
+    def test_arrow_click_maps_table_row_to_file(self):
+        w = self.window
+        w.name_delegate.toggled.emit(2)          # 表格第 2 行 = 第二个文件
+        self.assertFalse(w.table.isRowHidden(3))
 
     def test_row_is_painted_without_errors(self):
         w = self.window

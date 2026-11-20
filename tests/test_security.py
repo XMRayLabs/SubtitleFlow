@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 from nacl.signing import SigningKey
 from subtitleflow import updates
-from subtitleflow.safety import bounded_response, atomic_write, read_bytes, safe_tree
+from subtitleflow.safety import bounded_response, Cancelled, atomic_write, read_bytes, safe_tree
 from subtitleflow.jobs import Job, JobOptions
 from subtitleflow.api import APIConfig
 
@@ -37,7 +37,7 @@ class SecurityTests(unittest.TestCase):
         with self.assertRaises(ValueError): bounded_response(io.BytesIO(b'12345'),4)
         self.assertEqual(bounded_response(io.BytesIO(b'1234'),4),b'1234')
         cancel=threading.Event();cancel.set()
-        with self.assertRaises(RuntimeError): bounded_response(io.BytesIO(b'x'),cancel=cancel)
+        with self.assertRaises(Cancelled): bounded_response(io.BytesIO(b'x'),cancel=cancel)
         with self.assertRaises(ValueError): bounded_response(io.BytesIO(b'x'),seconds=-1)
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)/'large';p.write_bytes(b'12345')

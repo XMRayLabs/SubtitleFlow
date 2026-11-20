@@ -134,10 +134,14 @@ def build(window, table_type):
     w.table.verticalHeader().hide()
     w.table.verticalHeader().setDefaultSectionSize(46)
     w.table.setShowGrid(False)
-    w.table.setAlternatingRowColors(True)
+    w.table.setAlternatingRowColors(False)    # 底色按文件分组交替，由 gui.add_row 设定
     w.table.setMinimumHeight(170)
-    from .progress_view import ProgressDelegate
+    from .progress_view import DetailDelegate, ProgressDelegate, TintDelegate
+    w.table.setItemDelegateForColumn(1, TintDelegate(w.table))
     w.table.setItemDelegateForColumn(2, ProgressDelegate(w.table))
+    w.name_delegate = DetailDelegate(w.table)       # 文件名列：▸ 展开后在文件行下方显示深色详情面板
+    w.name_delegate.toggled.connect(lambda table_row: w.toggle_detail(table_row // 2))
+    w.table.setItemDelegateForColumn(0, w.name_delegate)
     file_layout.addWidget(w.table, 1)
     page.addWidget(files, 1)
 
@@ -147,7 +151,8 @@ def build(window, table_type):
     settings.setContentsMargins(20, 17, 20, 16)
     settings.setSpacing(14)
     w.mode = QComboBox()
-    for text, mode in (("合并后翻译", "both"), ("仅合并字幕", "merge"), ("仅翻译字幕", "translate"), ("SRT → FCPXML", "fcpxml")):
+    for text, mode in (("合并后翻译", "both"), ("仅合并字幕", "merge"), ("仅翻译字幕", "translate"), ("SRT → FCPXML", "fcpxml"),
+                       ("清理字幕", "clean")):
         w.mode.addItem(text, mode)
     w.mode.setMinimumWidth(185)
     mainrow = row(label("处理方式", "section"), w.mode)
@@ -255,6 +260,13 @@ def build(window, table_type):
     w.batch.setRange(1, 200)
     w.batch.setValue(20)
     form.addRow("每批字幕数", w.batch)
+    w.timeout = QSpinBox()
+    w.timeout.setRange(0, 1800)
+    w.timeout.setSingleStep(30)
+    w.timeout.setSuffix(" 秒")
+    w.timeout.setSpecialValueText("自动（本机 300 秒，云端 60 秒）")
+    w.timeout.setToolTip("每次请求最多等待多久。本机模型较慢时调长；超时的批次会自动拆小重试")
+    form.addRow("请求超时", w.timeout)
     api_layout.addLayout(form)
     w.api_status = label("填写地址和密钥后，点击加载模型。")
     w.api_status.setWordWrap(True)

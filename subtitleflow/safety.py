@@ -55,6 +55,10 @@ def atomic_write(path, content):
     finally:
         temporary.unlink(missing_ok=True)
 
+class Cancelled(Exception):
+    """用户取消；放在这里是因为 bounded_response 也要抛它，而 api 依赖 safety。"""
+
+
 class ResponseTimeout(ValueError):
     """响应正文在总时限内没读完。单独成类，调用方才能把它当超时，而不是格式错误。"""
 
@@ -64,7 +68,7 @@ def bounded_response(response, limit=JSON_LIMIT, cancel=None, seconds=60):
     chunks, size = [], 0
     while True:
         if cancel is not None and cancel.is_set():
-            raise RuntimeError('任务已取消')
+            raise Cancelled('任务已取消')
         if time.monotonic() > deadline:
             raise ResponseTimeout('响应超过总读取时限')
         chunk = getattr(response, 'read1', response.read)(min(65536, limit + 1 - size))
@@ -75,5 +79,5 @@ def bounded_response(response, limit=JSON_LIMIT, cancel=None, seconds=60):
             raise ValueError('响应超过允许的体积上限')
         chunks.append(chunk)
 
-def response_json(response, cancel=None):
-    return json.loads(bounded_response(response, cancel=cancel))
+def response_json(response, cancel=None, seconds=60):
+    return json.loads(bounded_response(response, cancel=cancel, seconds=seconds))

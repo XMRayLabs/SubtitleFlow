@@ -11,6 +11,7 @@ from .safety import safe_tree, read_json, read_bytes, atomic_write, SRT_LIMIT
 from .api import Client, APIConfig, Cancelled
 from .merge import MergeOptions, merge
 from .translate import translate, ai_boundaries, atomic_json
+from .clean import clean, report as clean_report, summary as clean_summary
 
 
 @dataclass(frozen=True)
@@ -34,12 +35,12 @@ class Job:
 
     def run(self):
         self.options.merge.validate()
-        if self.options.mode not in ("merge", "translate", "both", "fcpxml"):
+        if self.options.mode not in ("merge", "translate", "both", "fcpxml", "clean"):
             raise ValueError("未知处理模式")
         if not 1 <= self.options.batch_size <= 200:
             raise ValueError("每批条目数必须在 1–200 之间")
         needs_api = self.options.mode in ("translate", "both") or (self.options.ai and self.options.mode != "fcpxml")
-        if self.options.export_fcpxml or self.options.mode == "fcpxml":
+        if self.exports_fcpxml():
             fcpxml.ExportOptions(fps=self.options.fps).validate()
         if needs_api:
             self.api.endpoint()
@@ -91,7 +92,10 @@ class Job:
             (self.root / "合并后的srt").mkdir(exist_ok=True)
         if self.options.mode in ("translate", "both"):
             (self.root / "翻译后的srt").mkdir(exist_ok=True)
-        if self.options.export_fcpxml or self.options.mode == "fcpxml":
+        if self.options.mode == "clean":
+            for folder in ("清理后的srt", "清理报告"):
+                (self.root / folder).mkdir(exist_ok=True)
+        if self.exports_fcpxml():
             (self.root / "转换后的fcpxml").mkdir(exist_ok=True)
         report["status"] = "running"
         atomic_json(self.root / "report.json", report)
@@ -120,6 +124,15 @@ class Job:
                     raise ValueError("任务原始副本已被修改，请新建任务")
                 item["sha256"] = raw_hash
                 cues = srt.read(original)
+                outcome = ""
+                if self.options.mode == "clean":
+                    cleaned, changes = clean(cues)
+                    srt.write(self.root / "清理后的srt" / item["name"], cleaned)
+                    atomic_write(self.root / "清理报告" / (Path(item["name"]).stem + ".txt"),
+                                 clean_report(item["name"], len(cues), changes).encode("utf-8"))
+                    outcome = clean_summary(changes)
+                    self.log(item["name"], {"type": "cleaned", "removed": sum(c.action == "removed" for c in changes),
+                                            "fixed": sum(c.action == "fixed" for c in changes)})
                 if self.options.mode in ("merge", "both"):
                     boundaries = None
                     if self.options.ai:
@@ -139,12 +152,12 @@ class Job:
                     # 编号只写进翻译后的 SRT：FCPXML 标题里不该出现它
                     srt.write(self.root / "翻译后的srt" / item["name"],
                               srt.numbered(cues) if self.options.number_translated else cues)
-                if self.options.export_fcpxml or self.options.mode == "fcpxml":
+                if self.exports_fcpxml():
                     client.check()
                     fcpxml.write(self.root / "转换后的fcpxml" / (Path(item["name"]).stem + ".fcpxml"), cues, fcpxml.ExportOptions(fps=self.options.fps))
                 item["status"] = "done"
                 self.log(item["name"], {"type": "done"})
-                self.event("file", index, "已完成", "")
+                self.event("file", index, "已完成", outcome)
             except Cancelled:
                 item["status"] = "cancelled"
                 self.log(item["name"], {"type": "cancelled"})
@@ -164,6 +177,10 @@ class Job:
         self.event("complete", report["status"])
         return self.root
 
+    def exports_fcpxml(self):
+        # 清理字幕只输出清理后的 SRT；其余方式按勾选导出
+        return self.options.mode == "fcpxml" or (self.options.export_fcpxml and self.options.mode != "clean")
+
     def redact(self, text):
         return text.replace(self.api.key, "[REDACTED]") if self.api.key else text
 
@@ -182,7 +199,7 @@ class Job:
         """把 Client 的请求/重试事件和 translate 的批次事件合成一路：写日志，并转给界面。"""
         def report(event):
             event = {**event, "stage": stage}
-            self.log(name, event)
+            self.log(name, {k: v for k, v in event.items() if k != "preview"})
             self.event("activity", index, event)
         client.on_event = report
         return report
