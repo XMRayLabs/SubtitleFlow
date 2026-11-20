@@ -4,10 +4,11 @@ import json
 import ipaddress
 import ssl
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from .safety import response_json
+from .safety import ResponseTimeout, response_json
 
 
 class Cancelled(Exception):
@@ -75,6 +76,8 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class Client:
     def __init__(self, config: APIConfig, cancel: threading.Event):
         self.config, self.cancel = config, cancel
+        # 每次请求、重试、成功都回报一次（dict），让界面看得出是在等还是在重试；默认丢弃。
+        self.on_event = lambda event: None
 
     def check(self):
         if self.cancel.is_set():
@@ -171,11 +174,15 @@ class Client:
             headers["Authorization"] = "Bearer " + self.config.key
         for attempt in range(4):
             self.check()
+            self.on_event({"type": "request", "attempt": attempt + 1})
+            started = time.monotonic()
             try:
                 request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
                 with self.opener().open(request, timeout=self.config.timeout) as response:
                     data = response_json(response, self.cancel)
                 self.check()
+                self.on_event({"type": "answer", "attempt": attempt + 1,
+                               "elapsed": round(time.monotonic() - started, 1)})
                 choice = data["choices"][0]
                 if choice.get("finish_reason") == "length":
                     raise TooLarge("模型输出被截断")
@@ -197,15 +204,22 @@ class Client:
                     raise APIError(f"API 请求失败（HTTP {code}），请检查地址与模型") from None
 
                 delay = min(float(retry_after), 60) if retry_after.isdigit() else 2 ** attempt
+                cause = f"HTTP {code}"
+            except ResponseTimeout:
+                # 正文迟迟读不完和连接超时是一回事；以前落进下面的 ValueError，被误报成格式错误。
+                if attempt == 3:
+                    raise APIError("模型响应超时，重试 3 次后仍未完成；可减小每批条目数") from None
+                delay, cause = 2 ** attempt, "响应超时"
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
                 if isinstance(reason, (ssl.SSLError, ConnectionRefusedError)) or attempt == 3:
                     raise self.connection_error(exc) from None
-                delay = 2 ** attempt
+                delay, cause = 2 ** attempt, "请求超时或连接中断"
             except (KeyError, IndexError, TypeError, ValueError):
                 raise InvalidResponse("API 响应不是兼容的聊天结果") from None
             if attempt == 3:
                 raise APIError("API 临时故障，重试 3 次后仍未成功") from None
+            self.on_event({"type": "retry", "attempt": attempt + 1, "reason": cause, "delay": delay})
             if self.cancel.wait(delay):
                 raise Cancelled("任务已取消")
 

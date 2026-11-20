@@ -107,6 +107,7 @@ class Job:
                 item.pop("error", None)
                 item["status"] = "running"
                 atomic_json(self.root / "report.json", report)
+                self.log(item["name"], {"type": "start"})
                 self.event("file", index, "处理中", "")
                 original = self.root / "原始的srt" / item["name"]
                 safe_tree(self.root)
@@ -120,13 +121,20 @@ class Job:
                 item["sha256"] = raw_hash
                 cues = srt.read(original)
                 if self.options.mode in ("merge", "both"):
-                    boundaries = ai_boundaries(cues, client, self.options.batch_size) if self.options.ai else None
+                    boundaries = None
+                    if self.options.ai:
+                        self.event("file", index, "AI 断句中", "")
+                        on_activity = self.activity(client, index, item["name"], "AI 断句")
+                        boundaries = ai_boundaries(cues, client, self.options.batch_size,
+                                                   self.stage_progress(index, "AI 断句"), on_activity)
                     cues = merge(cues, self.options.merge, boundaries)
                     srt.write(self.root / "合并后的srt" / item["name"], cues)
                 if self.options.mode in ("translate", "both"):
+                    self.event("file", index, "翻译中", "")
+                    on_activity = self.activity(client, index, item["name"], "翻译")
                     cues = translate(cues, client, self.options.batch_size,
                                      self.root / ".progress" / (item["name"] + ".json"),
-                                     lambda done, total: self.event("file", index, "翻译中", f"{done}/{total}"))
+                                     self.stage_progress(index, "翻译"), on_activity)
                     client.check()
                     # 编号只写进翻译后的 SRT：FCPXML 标题里不该出现它
                     srt.write(self.root / "翻译后的srt" / item["name"],
@@ -135,18 +143,19 @@ class Job:
                     client.check()
                     fcpxml.write(self.root / "转换后的fcpxml" / (Path(item["name"]).stem + ".fcpxml"), cues, fcpxml.ExportOptions(fps=self.options.fps))
                 item["status"] = "done"
+                self.log(item["name"], {"type": "done"})
                 self.event("file", index, "已完成", "")
             except Cancelled:
                 item["status"] = "cancelled"
+                self.log(item["name"], {"type": "cancelled"})
                 self.event("file", index, "已取消", "")
                 break
             except Exception as exc:
                 item["status"] = "failed"
                 # Client errors are sanitized; redact key defensively for all other errors.
-                message = str(exc)
-                if self.api.key:
-                    message = message.replace(self.api.key, "[REDACTED]")
+                message = self.redact(str(exc))
                 item["error"] = message
+                self.log(item["name"], {"type": "failed", "error": type(exc).__name__, "message": message})
                 self.event("file", index, "失败", message)
             finally:
                 atomic_json(self.root / "report.json", report)
@@ -154,3 +163,29 @@ class Job:
         atomic_json(self.root / "report.json", report)
         self.event("complete", report["status"])
         return self.root
+
+    def redact(self, text):
+        return text.replace(self.api.key, "[REDACTED]") if self.api.key else text
+
+    def log(self, name, event):
+        """追加一行到任务目录的 translate.log（JSON Lines），事后排查哪一批卡住、为什么。
+        只记编号、计数、耗时和已脱敏的错误信息，绝不写请求或响应正文。"""
+        line = {"time": datetime.now().isoformat(timespec="seconds"), "file": name}
+        line.update({k: self.redact(v) if isinstance(v, str) else v for k, v in event.items()})
+        try:
+            with (self.root / "translate.log").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(line, ensure_ascii=False) + "\n")
+        except OSError:
+            pass  # 日志只是辅助排查，写不进去不该让翻译本身失败
+
+    def activity(self, client, index, name, stage):
+        """把 Client 的请求/重试事件和 translate 的批次事件合成一路：写日志，并转给界面。"""
+        def report(event):
+            event = {**event, "stage": stage}
+            self.log(name, event)
+            self.event("activity", index, event)
+        client.on_event = report
+        return report
+
+    def stage_progress(self, index, stage):
+        return lambda done, total: self.event("progress", index, stage, done, total)

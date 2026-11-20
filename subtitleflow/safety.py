@@ -55,6 +55,10 @@ def atomic_write(path, content):
     finally:
         temporary.unlink(missing_ok=True)
 
+class ResponseTimeout(ValueError):
+    """响应正文在总时限内没读完。单独成类，调用方才能把它当超时，而不是格式错误。"""
+
+
 def bounded_response(response, limit=JSON_LIMIT, cancel=None, seconds=60):
     deadline = time.monotonic() + seconds
     chunks, size = [], 0
@@ -62,7 +66,7 @@ def bounded_response(response, limit=JSON_LIMIT, cancel=None, seconds=60):
         if cancel is not None and cancel.is_set():
             raise RuntimeError('任务已取消')
         if time.monotonic() > deadline:
-            raise ValueError('响应超过总读取时限')
+            raise ResponseTimeout('响应超过总读取时限')
         chunk = getattr(response, 'read1', response.read)(min(65536, limit + 1 - size))
         if not chunk:
             return b''.join(chunks)

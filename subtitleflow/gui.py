@@ -13,6 +13,7 @@ from . import __version__
 from .api import APIConfig, Client
 from .jobs import Job, JobOptions
 from .merge import MergeOptions
+from .progress_view import ProgressDelegate, RowProgress, overall
 from . import updates
 from .safety import safe_tree, read_json
 from .widgets import FileTable, Worker
@@ -55,8 +56,13 @@ class Window(QMainWindow):
         self.transcription_service = None
         self.transcription_installed = None
         self.transcription_outdated = False
+        self.row_progress = []  # 与表格行一一对应的 RowProgress
         from .layout import build
         build(self, FileTable)
+        # 请求等待期间每秒刷新“请求中 Ns”；后台只在请求开始时发一次事件
+        self.progress_timer = QTimer(self)
+        self.progress_timer.setInterval(1000)
+        self.progress_timer.timeout.connect(self.tick_progress)
         self.engines_loaded.connect(self.transcribe_page.show_engines)
         if load_preferences:
             self.load_settings()
@@ -227,13 +233,17 @@ class Window(QMainWindow):
                 self.table.insertRow(row)
                 for col, text in enumerate((path.name, "等待", "")):
                     self.table.setItem(row, col, QTableWidgetItem(text))
+                self.row_progress.append(RowProgress())
+                self.refresh_row(row)
         self.file_count.setText(f"{len(self.paths)} 个文件")
         self.status.setText(f"已添加 {len(self.paths)} 个 SRT 文件")
         self.table.viewport().update()
 
     def clear_files(self):
         self.paths.clear()
+        self.row_progress.clear()
         self.table.setRowCount(0)
+        self.refresh_overall()
         self.file_count.setText("0 个文件")
         self.status.setText("拖入字幕，即可开始")
         self.table.viewport().update()
@@ -326,8 +336,10 @@ class Window(QMainWindow):
             self.error(str(exc))
             return
         self.cancel = threading.Event()
-        self.progress.setRange(0, max(1, len(self.paths)))
-        self.progress.setValue(0)
+        for row in range(len(self.row_progress)):
+            self.row_progress[row] = RowProgress()
+            self.refresh_row(row)
+        self.progress_timer.start()
         self.set_running(True)
         worker = Worker(lambda event: Job(self.paths, Path(self.output.text()), options, api,
                                          self.cancel, event, resume).run(), api.key)
@@ -357,15 +369,55 @@ class Window(QMainWindow):
             row, status, detail = values
             self.table.item(row, 1).setText(status)
             from PySide6.QtGui import QColor
-            self.table.item(row, 1).setForeground(QColor({"已完成": "#16856b", "失败": "#d14d61", "翻译中": "#5264e8", "处理中": "#5264e8"}.get(status, "#7a8498")))
-            self.table.item(row, 2).setText(detail)
-            finished = sum(self.table.item(i, 1).text() in ("已完成", "失败") for i in range(self.table.rowCount()))
-            self.progress.setValue(finished)
+            self.table.item(row, 1).setForeground(QColor({"已完成": "#16856b", "失败": "#d14d61", "翻译中": "#5264e8", "处理中": "#5264e8", "AI 断句中": "#5264e8"}.get(status, "#7a8498")))
+            progress = self.row_progress[row]
+            if status == "处理中":
+                progress.start()
+            elif status in ("已完成", "失败", "已取消"):
+                progress.finish({"已完成": "done", "失败": "failed", "已取消": "cancelled"}[status], detail)
+            self.refresh_row(row)
+        elif kind == "progress":
+            row, stage, done, total = values
+            self.row_progress[row].progress(stage, done, total)
+            self.refresh_row(row)
+        elif kind == "activity":
+            row, event = values
+            progress = self.row_progress[row]
+            progress.apply(event)
+            if event.get("type") in ("retry", "invalid", "split"):
+                self.status.setText(f"{self.table.item(row, 0).text()}：{progress.note}")
+            elif event.get("type") == "batch":
+                self.status.setText(f"正在{event.get('stage', '处理')} {self.table.item(row, 0).text()}")
+            self.refresh_row(row)
         elif kind == "complete":
             self.status.setText({"done": "全部处理完成", "partial": "部分文件失败，可以重试未完成文件",
                                  "cancelled": "任务已取消，已完成结果已保留"}[values[0]])
 
+    def refresh_row(self, row):
+        progress = self.row_progress[row]
+        item = self.table.item(row, 2)
+        text = progress.text()
+        item.setText(text)
+        item.setToolTip(text)
+        item.setData(ProgressDelegate.ROLE, (progress.fraction(), progress.color()))
+        self.refresh_overall()
+
+    def refresh_overall(self):
+        value = overall(self.row_progress)
+        self.progress.setValue(round(1000 * value))
+        if not self.row_progress:
+            self.progress_label.setText("")
+            return
+        finished = sum(r.state in ("done", "failed") for r in self.row_progress)
+        self.progress_label.setText(f"{finished}/{len(self.row_progress)} 个文件 · {round(100 * value)}%")
+
+    def tick_progress(self):
+        for row, progress in enumerate(self.row_progress):
+            if progress.started is not None:
+                self.refresh_row(row)
+
     def job_finished(self):
+        self.progress_timer.stop()
         self.workers.remove(self.job_worker)
         self.job_worker = None
         self.set_running(False)
@@ -398,6 +450,13 @@ class Window(QMainWindow):
                 self.table.insertRow(row)
                 for col, text in enumerate((item["source"], "已完成" if item["status"] == "done" else "待重试", item.get("error", ""))):
                     self.table.setItem(row, col, QTableWidgetItem(text))
+                progress = RowProgress()
+                if item["status"] == "done":
+                    progress.finish("done")
+                else:
+                    progress.note = item.get("error", "")
+                self.row_progress.append(progress)
+                self.refresh_row(row)
             self.last_root = root
             self.file_count.setText(f"{len(self.paths)} 个文件")
             self.retry_button.show()

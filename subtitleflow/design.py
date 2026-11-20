@@ -42,6 +42,8 @@ QHeaderView::section { background: #fafbfe; color: #8a93a5; border: none; border
 QTableCornerButton::section { border: none; background: white; }
 QProgressBar { border: none; border-radius: 3px; background: #e8ecf5; min-height: 5px; max-height: 5px; }
 QProgressBar::chunk { background: #6376ee; border-radius: 3px; }
+QProgressBar#overall { border-radius: 4px; min-height: 8px; max-height: 8px; }
+QProgressBar#overall::chunk { border-radius: 4px; background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #7d8cf3, stop:1 #5264e8); }
 QMenu { background: white; border: 1px solid #e3e7ef; padding: 6px; }
 QMenu::item { padding: 9px 24px; border-radius: 5px; }
 QMenu::item:selected { background: #edf0ff; }
