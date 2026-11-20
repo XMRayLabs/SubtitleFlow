@@ -26,7 +26,7 @@ COMPONENTS = {
     "pyinstaller-hooks-contrib": ("2026.7", "GPL-2.0-or-later AND Apache-2.0"),
     "altgraph": ("0.17.5", "MIT"),
     "packaging": ("26.3", "Apache-2.0 OR BSD-2-Clause"),
-    "setuptools": ("84.0.0", "MIT"),
+    "setuptools": ("84.1.0", "MIT"),
 }
 if sys.platform == "win32":
     COMPONENTS.update({"pywin32-ctypes": ("0.2.3", "BSD-3-Clause"), "pefile": ("2024.8.26", "MIT")})
